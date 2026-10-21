@@ -1,0 +1,7 @@
+---
+- name: Install Docker on ubuntu2404F
+  hosts: minio_nexus
+  become: true
+
+  roles:
+    - docker

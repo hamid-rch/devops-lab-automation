@@ -1,0 +1,22 @@
+---
+galaxy_info:
+  role_name: docker
+  author: Hamid
+  description: Install Docker Engine from the official Docker APT repository.
+  company: ""
+  license: MIT
+
+  min_ansible_version: "2.21.5"
+
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+
+  galaxy_tags:
+    - docker
+    - containers
+    - ubuntu
+    - devops
+
+dependencies: []

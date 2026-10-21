@@ -1,0 +1,22 @@
+---
+# Docker official APT repository
+docker_apt_repository_url: "https://download.docker.com/linux/ubuntu"
+docker_apt_key_url: "https://download.docker.com/linux/ubuntu/gpg"
+docker_apt_keyring_path: "/etc/apt/keyrings/docker.asc"
+docker_apt_repository_file: "/etc/apt/sources.list.d/docker.list"
+
+# Docker packages
+docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin
+
+# Docker service
+docker_service_name: docker
+docker_service_enabled: true
+docker_service_state: started
+
+# Package cache
+docker_apt_cache_valid_time: 3600
