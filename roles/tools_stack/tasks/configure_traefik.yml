@@ -1,0 +1,35 @@
+---
+- name: Install passlib for idempotent htpasswd management
+  ansible.builtin.apt:
+    name: python3-passlib
+    state: present
+    update_cache: true
+
+- name: Create tools stack directory
+  ansible.builtin.file:
+    path: "{{ tools_stack_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Create or update Traefik dashboard credentials
+  community.general.htpasswd:
+    path: "{{ tools_stack_dir }}/traefik_users"
+    name: "{{ traefik_dashboard_username }}"
+    password: "{{ vault_traefik_dashboard_password }}"
+    crypt_scheme: bcrypt
+    owner: root
+    group: root
+    mode: "0640"
+  no_log: true
+  notify: Restart Traefik
+
+- name: Deploy Traefik dynamic configuration
+  ansible.builtin.template:
+    src: traefik_dynamic.yml.j2
+    dest: "{{ tools_stack_dir }}/traefik_dynamic.yml"
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Restart Traefik

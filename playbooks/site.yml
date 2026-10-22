@@ -1,7 +1,8 @@
 ---
-- name: Install Docker on ubuntu2404F
+- name: Deploy Docker Tools Stack on ubuntu2404F
   hosts: minio_nexus
   become: true
 
   roles:
     - docker
+    - tools_stack

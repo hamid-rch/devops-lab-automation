@@ -1,0 +1,20 @@
+---
+tools_stack_dir: /opt/tools-stack
+
+traefik_image: "traefik:v3.7.16"
+nexus_image: "sonatype/nexus3:3.97.1"
+
+# Fixed tag, not "latest".
+# This is a legacy release, not a claim of being the newest MinIO.
+# minio_image: "quay-mirror.liara.ir/minio/aistor/minio:RELEASE.2026-09-19T17-05-25Z"
+minio_image: "docker.io/pgsty/minio:RELEASE.2026-08-04T00-00-00Z"
+
+traefik_http_port: 80
+
+nexus_hostname: "nexus.lab"
+minio_api_hostname: "minio.lab"
+minio_console_hostname: "minio-console.lab"
+
+# Traefik dashboard access. Set vault_traefik_dashboard_password in Ansible Vault.
+traefik_dashboard_hostname: "traefik.lab"
+traefik_dashboard_username: "admin"

@@ -1,0 +1,58 @@
+
+- name: Wait for Nexus to become writable
+  ansible.builtin.uri:
+    url: "http://127.0.0.1/service/rest/v1/status/writable"
+    method: GET
+    headers:
+      Host: "{{ nexus_hostname }}"
+    status_code: 200
+    return_content: false
+  register: nexus_ready
+  until: nexus_ready.status | default(0) == 200
+  retries: 60
+  delay: 10
+  changed_when: false
+
+- name: Check whether the configured Nexus password works
+  ansible.builtin.uri:
+    url: "http://127.0.0.1/service/rest/v1/repositories"
+    method: GET
+    headers:
+      Host: "{{ nexus_hostname }}"
+    url_username: admin
+    url_password: "{{ nexus_admin_password }}"
+    force_basic_auth: true
+    status_code:
+      - 200
+      - 401
+    return_content: false
+  register: nexus_auth_check
+  no_log: true
+  changed_when: false
+
+- name: Read initial Nexus admin password
+  community.docker.docker_container_exec:
+    container: nexus
+    command: cat /nexus-data/admin.password
+  register: nexus_initial_password
+  no_log: true
+  changed_when: false
+  when: nexus_auth_check.status == 401
+
+- name: Change initial Nexus admin password
+  ansible.builtin.uri:
+    url: "http://127.0.0.1/service/rest/internal/ui/onboarding/change-admin-password"
+    method: PUT
+    headers:
+      Host: "{{ nexus_hostname }}"
+      Content-Type: "text/plain"
+    user: admin
+    password: "{{ nexus_initial_password.stdout | trim }}"
+    force_basic_auth: true
+    body: "{{ nexus_admin_password }}"
+    status_code:
+      - 200
+      - 204
+    return_content: false
+  no_log: true
+  when: nexus_auth_check.status == 401

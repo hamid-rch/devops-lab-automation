@@ -1,0 +1,31 @@
+---
+- name: Configure Traefik files and dashboard authentication
+  ansible.builtin.import_tasks: configure_traefik.yml
+
+- name: Deploy Docker Compose configuration
+  ansible.builtin.template:
+    src: compose.yml.j2
+    dest: "{{ tools_stack_dir }}/compose.yml"
+    owner: root
+    group: root
+    mode: "0640"
+  no_log: true
+
+# This is deliberately a normal task, not only a handler.
+# It repairs the stack if someone ran `docker compose down` manually,
+# even when none of the Ansible-managed files changed.
+- name: Ensure tools stack is running
+  community.docker.docker_compose_v2:
+    project_src: "{{ tools_stack_dir }}"
+    files:
+      - compose.yml
+    state: present
+    pull: missing
+    wait: true
+    wait_timeout: 180
+
+- name: Run pending handlers
+  ansible.builtin.meta: flush_handlers
+
+- name: Configure Nexus
+  ansible.builtin.import_tasks: configure_nexus.yml

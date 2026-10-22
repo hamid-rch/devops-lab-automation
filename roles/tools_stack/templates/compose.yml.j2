@@ -1,0 +1,83 @@
+services:
+  traefik:
+    image: "{{ traefik_image }}"
+    container_name: traefik
+    restart: unless-stopped
+    command:
+      - "--api.dashboard=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=tools_net"
+      - "--providers.file.filename=/etc/traefik/dynamic.yml"
+      - "--providers.file.watch=true"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "{{ traefik_http_port }}:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - "{{ tools_stack_dir }}/traefik_dynamic.yml:/etc/traefik/dynamic.yml:ro"
+      - "{{ tools_stack_dir }}/traefik_users:/etc/traefik/traefik_users:ro"
+    networks:
+      - tools_net
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik-dashboard.rule=Host(`{{ traefik_dashboard_hostname }}`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))"
+      - "traefik.http.routers.traefik-dashboard.entrypoints=web"
+      - "traefik.http.routers.traefik-dashboard.service=api@internal"
+      - "traefik.http.routers.traefik-dashboard.middlewares=traefik-dashboard-auth@file"
+
+  nexus:
+    image: "{{ nexus_image }}"
+    container_name: nexus
+    restart: unless-stopped
+    volumes:
+      - nexus_data:/nexus-data
+    networks:
+      - tools_net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nexus.rule=Host(`{{ nexus_hostname }}`)"
+      - "traefik.http.routers.nexus.entrypoints=web"
+      - "traefik.http.services.nexus.loadbalancer.server.port=8081"
+
+  minio:
+    image: "{{ minio_image }}"
+    container_name: minio
+    restart: unless-stopped
+    command:
+      - server
+      - /data
+      - --console-address
+      - ":9001"
+    environment:
+      MINIO_ROOT_USER: "{{ minio_root_user }}"
+      MINIO_ROOT_PASSWORD: "{{ minio_root_password }}"
+    volumes:
+      - minio_data:/data
+    networks:
+      - tools_net
+    labels:
+      - "traefik.enable=true"
+
+      - "traefik.http.routers.minio-api.rule=Host(`{{ minio_api_hostname }}`)"
+      - "traefik.http.routers.minio-api.entrypoints=web"
+      - "traefik.http.routers.minio-api.service=minio-api"
+      - "traefik.http.services.minio-api.loadbalancer.server.port=9000"
+
+      - "traefik.http.routers.minio-console.rule=Host(`{{ minio_console_hostname }}`)"
+      - "traefik.http.routers.minio-console.entrypoints=web"
+      - "traefik.http.routers.minio-console.service=minio-console"
+      - "traefik.http.services.minio-console.loadbalancer.server.port=9001"
+
+networks:
+  tools_net:
+    name: tools_net
+    driver: bridge
+
+volumes:
+  nexus_data:
+    name: nexus_data
+  minio_data:
+    name: minio_data
