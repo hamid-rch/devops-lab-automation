@@ -1,0 +1,80 @@
+# ===== Elasticsearch setup =====
+- name: Ensure Elasticsearch container is running
+  community.docker.docker_compose_v2:
+    project_src: "{{ elk_compose_dir }}"
+    services:
+      - elasticsearch
+    state: present
+
+- name: Wait for Elasticsearch HTTP to respond 200 or 401
+  ansible.builtin.uri:
+    url: "{{ es_url }}"
+    method: GET
+    status_code:
+      - 200
+      - 401
+  register: es_status
+  retries: 30
+  delay: 5
+  until: es_status.status in [200, 401]
+- name: Ensure secrets directory exists
+  ansible.builtin.file:
+    path: "{{ kibana_token_file | dirname }}"
+    state: directory
+    mode: "0700"
+
+- name: Check for saved Kibana token
+  ansible.builtin.stat:
+    path: "{{ kibana_token_file }}"
+  register: kibana_token_stat
+
+- name: Load existing Kibana token
+  ansible.builtin.slurp:
+    src: "{{ kibana_token_file }}"
+  register: kibana_token_content
+  when: kibana_token_stat.stat.exists
+- name: Set Kibana token from file
+  ansible.builtin.set_fact:
+    kibana_token: "{{ kibana_token_content.content | b64decode | trim }}"
+  when: kibana_token_stat.stat.exists
+
+
+- name: Generate dynamic token name
+  ansible.builtin.set_fact:
+    token_name: "kibana-token-{{ ansible_facts.date_time.iso8601_basic_short }}"
+  when: not kibana_token_stat.stat.exists
+- name: Create service token inside Elasticsearch container
+  ansible.builtin.command: >
+    docker exec {{ es_container_name }}
+    elasticsearch-service-tokens create elastic/kibana {{ token_name }}
+  register: token_output
+  failed_when: token_output.rc != 0
+  when: not kibana_token_stat.stat.exists
+
+- name: Show raw output of token creation
+  debug:
+    var: token_output.stdout_lines
+  when: not kibana_token_stat.stat.exists
+- name: Extract kibana token value
+  ansible.builtin.set_fact:
+    kibana_token: "{{ token_output.stdout_lines
+                      | select('search','=')
+                      | map('regex_replace','^.*=\\s*(.+)','\\1')
+                      | list
+                      | first }}"
+  when: not kibana_token_stat.stat.exists
+- name: Save Kibana token locally
+  ansible.builtin.copy:
+    content: "{{ kibana_token }}"
+    dest: "{{ kibana_token_file }}"
+    mode: "0600"
+  when: not kibana_token_stat.stat.exists
+
+- name: Show extracted Kibana token
+  ansible.builtin.debug:
+    msg: "Kibana token loaded successfully"
+
+- name: Fail if token not found
+  ansible.builtin.fail:
+    msg: "Failed to extract kibana service token."
+  when: kibana_token is not defined or kibana_token == ''

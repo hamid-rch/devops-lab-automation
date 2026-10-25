@@ -1,0 +1,29 @@
+server.host: "0.0.0.0"
+server.name: kibana
+elasticsearch.hosts: ["{{ es_in_kibana_url }}"]
+elasticsearch.serviceAccountToken: {{ kibana_token | default('') | to_json }}
+xpack.encryptedSavedObjects.encryptionKey: "{{ kibana_encrypted_saved_objects_key }}"
+xpack.fleet.registryUrl: "{{ package_registry_url }}"
+
+xpack.fleet.packages:
+  - name: fleet_server
+    version: latest
+
+xpack.fleet.agentPolicies:
+  - name: Fleet Server policy
+    id: fleet-server-policy
+    namespace: default
+    package_policies:
+      - name: fleet_server-1
+        id: fleet_server-1
+        package:
+          name: fleet_server
+
+xpack.fleet.outputs:
+  - id: fleet-default-output
+    name: default
+    type: elasticsearch
+    hosts:
+      - "{{ es_in_kibana_url }}"
+    is_default: true
+    is_default_monitoring: true

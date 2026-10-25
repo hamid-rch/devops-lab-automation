@@ -1,0 +1,54 @@
+---
+# Keep the Elastic Stack versions aligned.
+elk_version: "9.5.5"
+elastic_agent_version: "9.5.5"
+
+# Official Elastic container images
+elasticsearch_image: "elasticsearch:{{ elk_version }}"
+logstash_image: "logstash:{{ elk_version }}"
+kibana_image: "kibana:{{ elk_version }}"
+elastic_agent_image: "elastic/elastic-agent:{{ elastic_agent_version }}"
+# its 22Gb so use lite version for test
+#package_registry_image: "elastic/package-registry-distribution:9.5.5"
+package_registry_image: "elastic/package-registry-distribution:lite-{{ elk_version }}"
+traefik_image: "traefik:v3.6"
+
+elk_compose_dir: /opt/elk-stack
+compose_file: "{{ elk_compose_dir }}/compose.yml"
+kibana_config_local_path: "{{ elk_compose_dir }}/kibana/config/kibana.yml"
+logstash_pipeline_dir: "{{ elk_compose_dir }}/logstash/pipeline"
+kibana_token_file: "{{ elk_compose_dir }}/.secrets/kibana.token"
+fleet_state_dir: "{{ elk_compose_dir }}/state"
+
+es_container_name: elasticsearch
+kibana_container_name: kibana
+
+es_url: "http://localhost:9200"
+es_in_kibana_url: "http://elasticsearch:9200"
+es_in_logstash_url: "http://elasticsearch:9200"
+
+# Published host ports; services communicate on the private Compose network.
+elasticsearch_publish_address: "127.0.0.1"
+elasticsearch_host_port: 9200
+kibana_publish_address: "0.0.0.0"
+kibana_host_port: 5601
+logstash_beats_host_port: 5044
+fleet_load_balancer_host_port: 8220
+
+# Fleet Server policy ID must be created in Kibana Fleet before Fleet Server can enroll.
+fleet_server_policy_id: ""
+fleet_server_service_token: ""
+fleet_server_token_name: "fleet-server-lab"
+fleet_server_url: "http://{{ ansible_host | default(inventory_hostname) }}:{{ fleet_load_balancer_host_port }}"
+traefik_dashboard_enabled: false
+
+# Local lab defaults: plain HTTP on a private lab network, not production security.
+elasticsearch_heap: "1g"
+logstash_heap: "512m"
+es_health_retries: 30
+es_health_delay: 5
+kibana_health_retries: 30
+kibana_health_delay: 5
+
+# Local registry contains the package metadata/artifacts needed by Fleet integrations.
+package_registry_url: "http://package-registry:8080"

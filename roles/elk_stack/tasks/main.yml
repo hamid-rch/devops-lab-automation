@@ -1,0 +1,185 @@
+---
+- name: Create ELK stack directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+  loop:
+    - "{{ elk_compose_dir }}"
+    - "{{ elk_compose_dir }}/kibana/config"
+    - "{{ elk_compose_dir }}/traefik"
+    - "{{ logstash_pipeline_dir }}"
+    - "{{ fleet_state_dir }}/fleet-server-a"
+    - "{{ fleet_state_dir }}/fleet-server-b"
+    - "{{ elk_compose_dir }}/.secrets"
+
+- name: Render Kibana configuration
+  ansible.builtin.template:
+    src: kibana.yml.j2
+    dest: "{{ kibana_config_local_path }}"
+    mode: "0640"
+  notify: Restart ELK Compose project
+
+- name: Render Logstash pipeline
+  ansible.builtin.template:
+    src: logstash.conf.j2
+    dest: "{{ logstash_pipeline_dir }}/logstash.conf"
+    mode: "0640"
+  notify: Restart ELK Compose project
+
+- name: Render Traefik TCP routing and health-check configuration
+  ansible.builtin.template:
+    src: traefik-dynamic.yml.j2
+    dest: "{{ elk_compose_dir }}/traefik/dynamic.yml"
+    mode: "0640"
+  notify: Restart ELK Compose project
+
+- name: Render Docker Compose file
+  ansible.builtin.template:
+    src: compose.yml.j2
+    dest: "{{ compose_file }}"
+    mode: "0640"
+
+- name: Start Elasticsearch only
+  community.docker.docker_compose_v2:
+    project_src: "{{ elk_compose_dir }}"
+    files:
+      - compose.yml
+    services:
+      - elasticsearch
+    state: present
+
+- name: Run the existing Elasticsearch setup tasks without modifications
+  ansible.builtin.import_tasks: elasticsearch.yml
+  no_log: true
+
+# Bring up Kibana and supporting services first so the user can create the Fleet Server policy.
+- name: Render Kibana configuration after the existing Elasticsearch task creates its token
+  ansible.builtin.template:
+    src: kibana.yml.j2
+    dest: "{{ kibana_config_local_path }}"
+    mode: "0640"
+
+- name: Render Compose after the Kibana service token is available
+  ansible.builtin.template:
+    src: compose.yml.j2
+    dest: "{{ compose_file }}"
+    mode: "0640"
+
+- name: Start Kibana, Logstash and the local Package Registry
+  community.docker.docker_compose_v2:
+    project_src: "{{ elk_compose_dir }}"
+    files:
+      - compose.yml
+    services:
+      - kibana
+      - logstash
+      - package-registry
+    state: present
+
+- name: Wait for Kibana HTTP endpoint
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ kibana_host_port }}"
+    method: GET
+    status_code: [200, 302, 401]
+    timeout: 10
+  register: kibana_status
+  retries: 80
+  delay: 10
+  until: kibana_status.status in [200, 302, 401]
+
+- name: Validate Fleet Server policy prerequisite
+  ansible.builtin.assert:
+    that:
+      - fleet_server_policy_id | length > 0
+      - fleet_server_policy_id is not search("REPLACE")
+    fail_msg: >-
+      Elasticsearch, Kibana, Logstash and Package Registry are now running.
+      Open Kibana > Fleet > Agent policies, create a Fleet Server policy,
+      set fleet_server_policy_id in Ansible Vault, and run the playbook again.
+
+- name: Check for cached Fleet Server service token
+  ansible.builtin.stat:
+    path: "{{ elk_compose_dir }}/.secrets/fleet-server.token"
+  register: fleet_token_file_stat
+  when: fleet_server_service_token | length == 0
+
+- name: Load cached Fleet Server service token
+  ansible.builtin.slurp:
+    src: "{{ elk_compose_dir }}/.secrets/fleet-server.token"
+  register: fleet_token_file_content
+  when:
+    - fleet_server_service_token | length == 0
+    - fleet_token_file_stat.stat.exists | default(false)
+
+- name: Set cached Fleet Server service token
+  ansible.builtin.set_fact:
+    effective_fleet_server_service_token: "{{ fleet_token_file_content.content | b64decode | trim }}"
+  when:
+    - fleet_server_service_token | length == 0
+    - fleet_token_file_stat.stat.exists | default(false)
+  no_log: true
+
+- name: Create Fleet Server service token if not supplied or cached
+  ansible.builtin.command:
+    argv:
+      - docker
+      - exec
+      - "{{ es_container_name }}"
+      - elasticsearch-service-tokens
+      - create
+      - elastic/fleet-server
+      - "{{ fleet_server_token_name }}"
+  register: fleet_token_command
+  changed_when: fleet_token_command.rc == 0
+  when:
+    - fleet_server_service_token | length == 0
+    - not (fleet_token_file_stat.stat.exists | default(false))
+  no_log: true
+
+- name: Extract newly created Fleet Server service token
+  ansible.builtin.set_fact:
+    effective_fleet_server_service_token: "{{ fleet_token_command.stdout | regex_search('=\\s*(\\S+)', '\\1') | first }}"
+  when:
+    - fleet_server_service_token | length == 0
+    - not (fleet_token_file_stat.stat.exists | default(false))
+  no_log: true
+
+- name: Use Fleet Server service token supplied in Vault
+  ansible.builtin.set_fact:
+    effective_fleet_server_service_token: "{{ fleet_server_service_token }}"
+  when: fleet_server_service_token | length > 0
+  no_log: true
+
+- name: Cache Fleet Server service token securely
+  ansible.builtin.copy:
+    content: "{{ effective_fleet_server_service_token }}"
+    dest: "{{ elk_compose_dir }}/.secrets/fleet-server.token"
+    owner: root
+    group: root
+    mode: "0600"
+  when: effective_fleet_server_service_token | default('') | length > 0
+  no_log: true
+
+- name: Render Compose with Fleet Server service token
+  ansible.builtin.template:
+    src: compose.yml.j2
+    dest: "{{ compose_file }}"
+    mode: "0640"
+  vars:
+    compose_fleet_server_token: "{{ effective_fleet_server_service_token | default(fleet_server_service_token) }}"
+  no_log: true
+
+- name: Start both Fleet Servers and their shared load balancer
+  community.docker.docker_compose_v2:
+    project_src: "{{ elk_compose_dir }}"
+    files:
+      - compose.yml
+    services:
+      - fleet-server-a
+      - fleet-server-b
+      - traefik
+    state: present
+  no_log: true

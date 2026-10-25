@@ -1,0 +1,30 @@
+tcp:
+  routers:
+    fleet:
+      entryPoints:
+        - fleet
+      rule: "HostSNI(`*`)"
+      service: fleet-server-pool
+  services:
+    fleet-server-pool:
+      loadBalancer:
+        servers:
+          - address: "fleet-server-a:8220"
+          - address: "fleet-server-b:8220"
+        healthCheck:
+          interval: "10s"
+          timeout: "3s"
+
+http:
+  routers:
+    kibana:
+      entryPoints:
+        - web
+      rule: "Host(`elk.lab`)"
+      service: kibana-service
+
+  services:
+    kibana-service:
+      loadBalancer:
+        servers:
+          - url: "http://kibana:5601"

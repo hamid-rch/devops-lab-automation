@@ -4,5 +4,6 @@
   become: true
 
   roles:
-    - docker
-    - tools_stack
+    #- docker
+    #- tools_stack
+    - elk_stack

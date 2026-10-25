@@ -1,0 +1,14 @@
+input {
+  beats {
+    port => 5044
+  }
+}
+
+output {
+  stdout { codec => rubydebug }
+  elasticsearch {
+    hosts => ["{{ es_in_logstash_url }}"]
+    user => "elastic"
+    password => "${ELASTIC_PASSWORD}"
+  }
+}
