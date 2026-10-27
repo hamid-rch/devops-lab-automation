@@ -1,0 +1,6 @@
+http:
+  middlewares:
+    monitoring-auth:
+      basicAuth:
+        usersFile: /etc/traefik/traefik_users
+        removeHeader: true

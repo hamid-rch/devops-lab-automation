@@ -1,0 +1,25 @@
+groups:
+  - name: infrastructure-alerts
+    rules:
+      - alert: TargetDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Monitoring target is down"
+          description: "Target {{ '{{' }} $labels.instance {{ '}}' }} has been down for more than 1 minute."
+
+      - alert: HighCPUUsage
+        expr: |
+          100 - (
+            avg by (instance) (
+              rate(node_cpu_seconds_total{mode="idle"}[5m])
+            ) * 100
+          ) > 80
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage"
+          description: "CPU usage on {{ '{{' }} $labels.instance {{ '}}' }} has exceeded 80% for 2 minutes."

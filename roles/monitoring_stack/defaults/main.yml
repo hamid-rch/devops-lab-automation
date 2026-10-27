@@ -1,0 +1,20 @@
+---
+monitoring_stack_dir: /opt/monitoring-stack
+
+monitoring_prometheus_image: prom/prometheus:v3.15.1
+monitoring_grafana_image: grafana/grafana:13.2.4-ubuntu
+monitoring_alertmanager_image: prom/alertmanager:v0.34.1
+monitoring_loki_image: grafana/loki:main-47c84cb
+monitoring_alloy_image: grafana/alloy:v1.21.2
+monitoring_docker_socket_proxy_image: tecnativa/docker-socket-proxy:master
+monitoring_traefik_image: traefik:v3.7.16
+
+monitoring_traefik_host_port: 80
+monitoring_traefik_dashboard_hostname: monitoring-traefik.lab
+monitoring_grafana_hostname: grafana.lab
+monitoring_prometheus_hostname: prometheus.lab
+monitoring_alertmanager_hostname: alertmanager.lab
+monitoring_loki_hostname: loki.lab
+
+monitoring_scrape_interval: 15s
+monitoring_node_exporter_target: 192.168.56.33:9100

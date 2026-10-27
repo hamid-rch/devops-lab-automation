@@ -1,0 +1,194 @@
+---
+# - name: Install passlib for bcrypt htpasswd generation
+#   ansible.builtin.apt:
+#     name: python3-passlib
+#     state: present
+#     update_cache: true
+
+- name: Create monitoring directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+  loop:
+    - "{{ monitoring_stack_dir }}"
+    - "{{ monitoring_stack_dir }}/rules"
+    - "{{ monitoring_stack_dir }}/grafana/provisioning/datasources"
+
+# Traefik dashboard credentials
+- name: Create or update Traefik dashboard credentials
+  community.general.htpasswd:
+    path: "{{ monitoring_stack_dir }}/traefik_users"
+    name: "{{ vault_monitoring_traefik_dashboard_username | default('admin') }}"
+    password: "{{ vault_monitoring_traefik_dashboard_password }}"
+    crypt_scheme: bcrypt
+    owner: root
+    group: root
+    mode: "0644"
+    state: present
+  no_log: true
+  notify: Restart monitoring stack
+
+# Prometheus credentials
+- name: Create or update Prometheus credentials
+  community.general.htpasswd:
+    path: "{{ monitoring_stack_dir }}/prometheus_users"
+    name: "{{ vault_monitoring_basic_auth_username | default('monitoring-admin') }}"
+    password: "{{ vault_monitoring_basic_auth_password }}"
+    crypt_scheme: bcrypt
+    owner: root
+    group: root
+    mode: "0640"
+    state: present
+  no_log: true
+
+- name: Read Prometheus password hash
+  ansible.builtin.slurp:
+    src: "{{ monitoring_stack_dir }}/prometheus_users"
+  register: prometheus_users_file
+  no_log: true
+
+- name: Set Prometheus password hash fact
+  ansible.builtin.set_fact:
+    prometheus_bcrypt_hash: >-
+      {{ (prometheus_users_file.content | b64decode).split(':', 1)[1] | trim }}
+  no_log: true
+
+- name: Deploy Prometheus web authentication configuration
+  ansible.builtin.template:
+    src: web.yml.j2
+    dest: "{{ monitoring_stack_dir }}/web.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  no_log: true
+  notify: Restart monitoring stack
+
+# Alertmanager credentials
+- name: Create or update Alertmanager credentials
+  community.general.htpasswd:
+    path: "{{ monitoring_stack_dir }}/alertmanager_users"
+    name: "{{ vault_monitoring_alertmanager_username | default('admin') }}"
+    password: "{{ vault_monitoring_alertmanager_password }}"
+    crypt_scheme: bcrypt
+    owner: root
+    group: root
+    mode: "0644"
+    state: present
+  no_log: true
+
+- name: Read Alertmanager password hash
+  ansible.builtin.slurp:
+    src: "{{ monitoring_stack_dir }}/alertmanager_users"
+  register: alertmanager_users_file
+  no_log: true
+
+- name: Set Alertmanager password hash fact
+  ansible.builtin.set_fact:
+    alertmanager_bcrypt_hash: >-
+      {{ (alertmanager_users_file.content | b64decode).split(':', 1)[1] | trim }}
+  no_log: true
+
+- name: Deploy Alertmanager web authentication configuration
+  ansible.builtin.template:
+    src: alertmanager_web.yml.j2
+    dest: "{{ monitoring_stack_dir }}/alertmanager_web.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  no_log: true
+  notify: Restart monitoring stack
+
+# Prometheus configuration
+- name: Deploy Prometheus configuration
+  ansible.builtin.template:
+    src: prometheus.yml.j2
+    dest: "{{ monitoring_stack_dir }}/prometheus.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart monitoring stack
+
+- name: Deploy Prometheus alert rules
+  ansible.builtin.template:
+    src: alerts.yml.j2
+    dest: "{{ monitoring_stack_dir }}/rules/alerts.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart monitoring stack
+
+# Alertmanager configuration
+- name: Deploy Alertmanager configuration
+  ansible.builtin.template:
+    src: alertmanager.yml.j2
+    dest: "{{ monitoring_stack_dir }}/alertmanager.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart monitoring stack
+
+# Traefik configuration
+- name: Deploy Traefik dynamic authentication configuration
+  ansible.builtin.template:
+    src: traefik_dynamic.yml.j2
+    dest: "{{ monitoring_stack_dir }}/traefik_dynamic.yml"
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Restart monitoring stack
+
+# Grafana configuration
+- name: Deploy Grafana Prometheus datasource provisioning
+  ansible.builtin.template:
+    src: grafana-datasource.yml.j2
+    dest: "{{ monitoring_stack_dir }}/grafana/provisioning/datasources/prometheus.yml"
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Restart monitoring stack
+
+# Loki configuration
+- name: Deploy Loki configuration
+  ansible.builtin.template:
+    src: loki.yml.j2
+    dest: "{{ monitoring_stack_dir }}/loki.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart monitoring stack
+
+# Grafana Alloy configuration
+- name: Deploy Grafana Alloy configuration
+  ansible.builtin.template:
+    src: alloy-config.alloy.j2
+    dest: "{{ monitoring_stack_dir }}/alloy-config.alloy"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart monitoring stack
+
+# Docker Compose
+- name: Deploy monitoring Compose file
+  ansible.builtin.template:
+    src: compose.yml.j2
+    dest: "{{ monitoring_stack_dir }}/compose.yml"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Ensure monitoring stack is running
+  community.docker.docker_compose_v2:
+    project_src: "{{ monitoring_stack_dir }}"
+    files:
+      - compose.yml
+    state: present
+    pull: missing
+    wait: true
+    wait_timeout: 180
+
+- name: Run pending handlers after initial deployment
+  ansible.builtin.meta: flush_handlers

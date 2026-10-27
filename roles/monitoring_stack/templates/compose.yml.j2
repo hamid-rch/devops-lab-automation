@@ -1,0 +1,161 @@
+services:
+  monitoring-traefik:
+    image: "{{ monitoring_traefik_image }}"
+    container_name: monitoring-traefik
+    restart: unless-stopped
+    command:
+      - "--api.dashboard=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=monitoring_net"
+      - "--providers.file.filename=/etc/traefik/dynamic.yml"
+      - "--providers.file.watch=true"
+      - "--entrypoints.web.address=:80"
+      - "--log.level=INFO"
+    ports:
+      - "{{ monitoring_traefik_host_port }}:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - "{{ monitoring_stack_dir }}/traefik_dynamic.yml:/etc/traefik/dynamic.yml:ro"
+      - "{{ monitoring_stack_dir }}/traefik_users:/etc/traefik/traefik_users:ro"
+    networks:
+      - monitoring_net
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=monitoring_net"
+      - "traefik.http.routers.monitoring-traefik.rule=Host(`{{ monitoring_traefik_dashboard_hostname }}`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))"
+      - "traefik.http.routers.monitoring-traefik.entrypoints=web"
+      - "traefik.http.routers.monitoring-traefik.service=api@internal"
+      
+
+  prometheus:
+    image: "{{ monitoring_prometheus_image }}"
+    container_name: monitoring-prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+      - "--web.config.file=/etc/prometheus/web.yml"
+    volumes:
+      - "{{ monitoring_stack_dir }}/prometheus.yml:/etc/prometheus/prometheus.yml:ro"
+      - "{{ monitoring_stack_dir }}/web.yml:/etc/prometheus/web.yml:ro"
+      - "{{ monitoring_stack_dir }}/rules:/etc/prometheus/rules:ro"
+      - prometheus-data:/prometheus
+    networks:
+      - monitoring_net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=monitoring_net"
+      - "traefik.http.routers.monitoring-prometheus.rule=Host(`{{ monitoring_prometheus_hostname }}`)"
+      - "traefik.http.routers.monitoring-prometheus.entrypoints=web"
+      - "traefik.http.services.monitoring-prometheus.loadbalancer.server.port=9090"
+
+  grafana:
+    image: "{{ monitoring_grafana_image }}"
+    container_name: monitoring-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: "{{ vault_monitoring_grafana_admin_user | default('admin') }}"
+      GF_SECURITY_ADMIN_PASSWORD: "{{ vault_monitoring_grafana_admin_password | replace('$', '$$') }}"
+      GF_SERVER_ROOT_URL: "http://{{ monitoring_grafana_hostname }}{% if monitoring_traefik_host_port | int != 80 %}:{{ monitoring_traefik_host_port }}{% endif %}/"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - "{{ monitoring_stack_dir }}/grafana/provisioning/datasources/prometheus.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro"
+    networks:
+      - monitoring_net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=monitoring_net"
+      - "traefik.http.routers.monitoring-grafana.rule=Host(`{{ monitoring_grafana_hostname }}`)"
+      - "traefik.http.routers.monitoring-grafana.entrypoints=web"
+      - "traefik.http.services.monitoring-grafana.loadbalancer.server.port=3000"
+  
+  loki:
+    image: "{{ monitoring_loki_image }}"
+    container_name: monitoring-loki
+    restart: unless-stopped
+    command:
+      - "-config.file=/etc/loki/local-config.yaml"
+    volumes:
+      - "{{ monitoring_stack_dir }}/loki.yml:/etc/loki/local-config.yaml:ro"
+      - loki-data:/loki
+    networks:
+      - monitoring_net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=monitoring_net"
+      - "traefik.http.routers.monitoring-loki.rule=Host(`{{ monitoring_loki_hostname }}`)"
+      - "traefik.http.routers.monitoring-loki.entrypoints=web"
+      - "traefik.http.services.monitoring-loki.loadbalancer.server.port=3100"
+  
+  docker-socket-proxy:
+    image: "{{ monitoring_docker_socket_proxy_image }}"
+    container_name: monitoring-docker-socket-proxy
+    restart: unless-stopped
+    environment:
+      CONTAINERS: "1"
+      NETWORKS: "1"
+      POST: "0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - monitoring_net
+    security_opt:
+      - no-new-privileges:true
+  
+
+  alloy:
+    image: "{{ monitoring_alloy_image }}"
+    container_name: monitoring-alloy
+    restart: unless-stopped
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - "{{ monitoring_stack_dir }}/alloy-config.alloy:/etc/alloy/config.alloy:ro"
+      - alloy-data:/var/lib/alloy/data
+    networks:
+      - monitoring_net
+
+  alertmanager:
+    image: "{{ monitoring_alertmanager_image }}"
+    container_name: monitoring-alertmanager
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+      - "--web.config.file=/etc/alertmanager/web.yml"
+    volumes:
+      - "{{ monitoring_stack_dir }}/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro"
+      - "{{ monitoring_stack_dir }}/alertmanager_web.yml:/etc/alertmanager/web.yml:ro"
+      - alertmanager-data:/alertmanager
+    networks:
+      - monitoring_net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=monitoring_net"
+      - "traefik.http.routers.monitoring-alertmanager.rule=Host(`{{ monitoring_alertmanager_hostname }}`)"
+      - "traefik.http.routers.monitoring-alertmanager.entrypoints=web"
+      - "traefik.http.services.monitoring-alertmanager.loadbalancer.server.port=9093"
+
+networks:
+  monitoring_net:
+    name: monitoring_net
+    driver: bridge
+
+volumes:
+  prometheus-data:
+    name: monitoring_prometheus_data
+  grafana-data:
+    name: monitoring_grafana_data
+  alertmanager-data:
+    name: monitoring_alertmanager_data
+  loki-data:
+    name: monitoring_loki_data
+  alloy-data:
+    name: monitoring_alloy_data

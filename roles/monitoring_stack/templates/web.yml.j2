@@ -1,0 +1,2 @@
+basic_auth_users:
+  {{ (vault_monitoring_basic_auth_username | default('monitoring-admin')) | to_json }}: {{ prometheus_bcrypt_hash | to_json }}
