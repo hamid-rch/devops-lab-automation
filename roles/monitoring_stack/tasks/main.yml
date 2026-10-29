@@ -1,10 +1,4 @@
 ---
-# - name: Install passlib for bcrypt htpasswd generation
-#   ansible.builtin.apt:
-#     name: python3-passlib
-#     state: present
-#     update_cache: true
-
 - name: Create monitoring directories
   ansible.builtin.file:
     path: "{{ item }}"
@@ -16,6 +10,9 @@
     - "{{ monitoring_stack_dir }}"
     - "{{ monitoring_stack_dir }}/rules"
     - "{{ monitoring_stack_dir }}/grafana/provisioning/datasources"
+    - "{{ monitoring_stack_dir }}/mimir"
+    - "{{ monitoring_stack_dir }}/tempo"
+    - "{{ monitoring_stack_dir }}/minio"
 
 # Traefik dashboard credentials
 - name: Create or update Traefik dashboard credentials
@@ -125,9 +122,10 @@
   ansible.builtin.template:
     src: alertmanager.yml.j2
     dest: "{{ monitoring_stack_dir }}/alertmanager.yml"
-    owner: root
-    group: root
-    mode: "0644"
+    owner: "65534"
+    group: "65534"
+    mode: "0600"
+  no_log: true
   notify: Restart monitoring stack
 
 # Traefik configuration
@@ -165,6 +163,36 @@
   ansible.builtin.template:
     src: alloy-config.alloy.j2
     dest: "{{ monitoring_stack_dir }}/alloy-config.alloy"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart monitoring stack
+
+# Grafana Mimir configuration
+- name: Deploy Mimir configuration
+  ansible.builtin.template:
+    src: mimir.yml.j2
+    dest: "{{ monitoring_stack_dir }}/mimir/mimir.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart monitoring stack
+
+# Mimir load balancer configuration
+- name: Deploy Mimir load balancer configuration
+  ansible.builtin.template:
+    src: mimir-nginx.conf.j2
+    dest: "{{ monitoring_stack_dir }}/mimir/nginx.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart monitoring stack
+
+# Grafana Tempo configuration
+- name: Deploy Tempo configuration
+  ansible.builtin.template:
+    src: tempo.yml.j2
+    dest: "{{ monitoring_stack_dir }}/tempo/tempo.yml"
     owner: root
     group: root
     mode: "0644"

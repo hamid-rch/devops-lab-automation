@@ -1,8 +1,9 @@
+
 global:
   resolve_timeout: 5m
 
 route:
-  receiver: default
+  receiver: telegram
   group_by:
     - alertname
   group_wait: 10s
@@ -10,4 +11,18 @@ route:
   repeat_interval: 1h
 
 receivers:
-  - name: default
+  - name: telegram
+    telegram_configs:
+      - bot_token: "{{ vault_monitoring_telegram_bot_token }}"
+        chat_id: {{ vault_monitoring_telegram_chat_id | int }}
+        api_url: "https://api.telegram.org"
+        send_resolved: true
+        parse_mode: ""
+        message: |-
+          {% raw %}{{ if eq .Status "firing" }}🚨 FIRING{{ else }}✅ RESOLVED{{ end }}
+          {{ range .Alerts }}
+          Alert: {{ .Labels.alertname }}
+          Severity: {{ .Labels.severity }}
+          Instance: {{ .Labels.instance }}
+          {{ if .Annotations.summary }}Summary: {{ .Annotations.summary }}{{ end }}
+          {{ end }}{% endraw %}

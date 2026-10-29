@@ -8,6 +8,29 @@ monitoring_loki_image: grafana/loki:main-47c84cb
 monitoring_alloy_image: grafana/alloy:v1.21.2
 monitoring_docker_socket_proxy_image: tecnativa/docker-socket-proxy:master
 monitoring_traefik_image: traefik:v3.7.16
+monitoring_minio_image: docker.io/pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+monitoring_minio_init_image: docker.io/pgsty/mc:RELEASE.2026-08-04T00-00-00Z
+monitoring_mimir_image: grafana/mimir:3.2.3
+monitoring_mimir_lb_image: nginx:1.31.8
+monitoring_tempo_image: grafana/tempo:3.1.1
+
+# Grafana Mimir
+monitoring_mimir_replicas: 3
+monitoring_mimir_hostname: mimir.lab
+monitoring_mimir_tenant_id: anonymous
+monitoring_mimir_http_port: 9009
+
+# MinIO object storage
+monitoring_minio_api_port: 9000
+monitoring_minio_console_port: 9001
+
+# Buckets
+monitoring_mimir_bucket: mimir-blocks
+monitoring_loki_bucket: loki-logs
+monitoring_tempo_bucket: tempo-traces
+
+# Internal object storage endpoint
+monitoring_minio_endpoint: minio:9000
 
 monitoring_traefik_host_port: 80
 monitoring_traefik_dashboard_hostname: monitoring-traefik.lab
@@ -15,6 +38,7 @@ monitoring_grafana_hostname: grafana.lab
 monitoring_prometheus_hostname: prometheus.lab
 monitoring_alertmanager_hostname: alertmanager.lab
 monitoring_loki_hostname: loki.lab
+monitoring_minio_hostname: monitoring-minio.lab
 
 monitoring_scrape_interval: 15s
 monitoring_node_exporter_target: 192.168.56.33:9100

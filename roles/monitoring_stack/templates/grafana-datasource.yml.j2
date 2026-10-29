@@ -9,9 +9,25 @@ datasources:
     isDefault: true
     editable: true
 
+  - name: Mimir
+    uid: mimir
+    type: prometheus
+    access: proxy
+    url: http://mimir-lb:9009/prometheus
+    jsonData:
+      httpHeaderName1: X-Scope-OrgID
+    secureJsonData:
+      httpHeaderValue1: {{ monitoring_mimir_tenant_id }}
+  
   - name: Loki
     uid: loki
     type: loki
     access: proxy
     url: http://loki:3100
     editable: true
+  
+  - name: Tempo
+    uid: tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200

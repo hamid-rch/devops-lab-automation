@@ -1,3 +1,4 @@
+
 auth_enabled: false
 
 server:
@@ -6,10 +7,6 @@ server:
 
 common:
   path_prefix: /loki
-  storage:
-    filesystem:
-      chunks_directory: /loki/chunks
-      rules_directory: /loki/rules
   replication_factor: 1
   ring:
     kvstore:
@@ -19,11 +16,30 @@ schema_config:
   configs:
     - from: 2024-01-01
       store: tsdb
-      object_store: filesystem
+      object_store: s3
       schema: v13
       index:
         prefix: index_
         period: 24h
+
+storage_config:
+  use_thanos_objstore: true
+
+  object_store:
+    s3:
+      endpoint: "{{ monitoring_minio_endpoint }}"
+      bucket_name: "{{ monitoring_loki_bucket }}"
+      access_key_id: "{{ vault_monitoring_minio_root_user }}"
+      secret_access_key: "{{ vault_monitoring_minio_root_password }}"
+      insecure: true
+      bucket_lookup_type: path
+
+  tsdb_shipper:
+    active_index_directory: /loki/tsdb-index
+    cache_location: /loki/tsdb-cache
+
+compactor:
+  working_directory: /loki/compactor
 
 analytics:
   reporting_enabled: false

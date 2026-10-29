@@ -1,0 +1,48 @@
+multitenancy_enabled: true
+
+server:
+  http_listen_port: 9009
+
+memberlist:
+  bind_port: 7946
+  join_members:
+    - mimir-1:7946
+    - mimir-2:7946
+    - mimir-3:7946
+
+blocks_storage:
+  backend: s3
+  s3:
+    endpoint: "{{ monitoring_minio_endpoint }}"
+    bucket_name: "{{ monitoring_mimir_bucket }}"
+    access_key_id: "{{ vault_monitoring_minio_root_user }}"
+    secret_access_key: "{{ vault_monitoring_minio_root_password }}"
+    insecure: true
+    region: us-east-1
+  tsdb:
+    dir: /data/tsdb
+  bucket_store:
+    sync_dir: /data/tsdb-sync
+
+distributor:
+  ring:
+    kvstore:
+      store: memberlist
+
+ingester:
+  ring:
+    kvstore:
+      store: memberlist
+    replication_factor: 3
+
+compactor:
+  data_dir: /data/compactor
+  sharding_ring:
+    kvstore:
+      store: memberlist
+
+store_gateway:
+  sharding_ring:
+    kvstore:
+      store: memberlist
+    replication_factor: 1

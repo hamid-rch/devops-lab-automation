@@ -1,2 +1,2 @@
 basic_auth_users:
-  {{ vault_monitoring_alertmanager_username | default('admin') | to_json }}: {{ vault_monitoring_alertmanager_password | password_hash('bcrypt') | to_json }}
+  {{ vault_monitoring_alertmanager_username | default('admin') | to_json }}: {{ alertmanager_bcrypt_hash | to_json }}

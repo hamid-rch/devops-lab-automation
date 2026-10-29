@@ -1,0 +1,29 @@
+stream_over_http_enabled: true
+
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+storage:
+  trace:
+    backend: s3
+    wal:
+      path: /var/tempo/wal
+    s3:
+      bucket: "{{ monitoring_tempo_bucket }}"
+      endpoint: "{{ monitoring_minio_endpoint }}"
+      access_key: "{{ vault_monitoring_minio_root_user }}"
+      secret_key: "{{ vault_monitoring_minio_root_password }}"
+      insecure: true
+      region: us-east-1
+      forcepathstyle: true
+    block:
+      version: vParquet4

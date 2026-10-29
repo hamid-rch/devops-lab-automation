@@ -12,10 +12,10 @@ services:
       - "--providers.file.watch=true"
       - "--entrypoints.web.address=:80"
       - "--log.level=INFO"
+      - "--providers.docker.endpoint=tcp://docker-socket-proxy:2375"
     ports:
       - "{{ monitoring_traefik_host_port }}:80"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
       - "{{ monitoring_stack_dir }}/traefik_dynamic.yml:/etc/traefik/dynamic.yml:ro"
       - "{{ monitoring_stack_dir }}/traefik_users:/etc/traefik/traefik_users:ro"
     networks:
@@ -28,7 +28,9 @@ services:
       - "traefik.http.routers.monitoring-traefik.rule=Host(`{{ monitoring_traefik_dashboard_hostname }}`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))"
       - "traefik.http.routers.monitoring-traefik.entrypoints=web"
       - "traefik.http.routers.monitoring-traefik.service=api@internal"
-      
+    depends_on:
+      docker-socket-proxy:
+        condition: service_started
 
   prometheus:
     image: "{{ monitoring_prometheus_image }}"
@@ -72,7 +74,7 @@ services:
       - "traefik.http.routers.monitoring-grafana.rule=Host(`{{ monitoring_grafana_hostname }}`)"
       - "traefik.http.routers.monitoring-grafana.entrypoints=web"
       - "traefik.http.services.monitoring-grafana.loadbalancer.server.port=3000"
-  
+
   loki:
     image: "{{ monitoring_loki_image }}"
     container_name: monitoring-loki
@@ -82,6 +84,9 @@ services:
     volumes:
       - "{{ monitoring_stack_dir }}/loki.yml:/etc/loki/local-config.yaml:ro"
       - loki-data:/loki
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
     networks:
       - monitoring_net
     labels:
@@ -90,7 +95,7 @@ services:
       - "traefik.http.routers.monitoring-loki.rule=Host(`{{ monitoring_loki_hostname }}`)"
       - "traefik.http.routers.monitoring-loki.entrypoints=web"
       - "traefik.http.services.monitoring-loki.loadbalancer.server.port=3100"
-  
+
   docker-socket-proxy:
     image: "{{ monitoring_docker_socket_proxy_image }}"
     container_name: monitoring-docker-socket-proxy
@@ -98,14 +103,17 @@ services:
     environment:
       CONTAINERS: "1"
       NETWORKS: "1"
+      EVENTS: "1"
+      INFO: "1"
+      VERSION: "1"
+      PING: "1"
       POST: "0"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - monitoring_net
     security_opt:
       - no-new-privileges:true
-  
 
   alloy:
     image: "{{ monitoring_alloy_image }}"
@@ -121,6 +129,12 @@ services:
       - alloy-data:/var/lib/alloy/data
     networks:
       - monitoring_net
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    depends_on:
+      docker-socket-proxy:
+        condition: service_started
 
   alertmanager:
     image: "{{ monitoring_alertmanager_image }}"
@@ -143,6 +157,131 @@ services:
       - "traefik.http.routers.monitoring-alertmanager.entrypoints=web"
       - "traefik.http.services.monitoring-alertmanager.loadbalancer.server.port=9093"
 
+  minio:
+    image: "{{ monitoring_minio_image }}"
+    container_name: monitoring-minio
+    restart: unless-stopped
+    command:
+      - server
+      - /data
+      - --console-address
+      - ":9001"
+    environment:
+      MINIO_ROOT_USER: "{{ vault_monitoring_minio_root_user }}"
+      MINIO_ROOT_PASSWORD: "{{ vault_monitoring_minio_root_password }}"
+    volumes:
+      - minio-data:/data
+    networks:
+      - monitoring_net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=monitoring_net"
+      - "traefik.http.routers.monitoring-minio.rule=Host(`{{ monitoring_minio_hostname }}`)"
+      - "traefik.http.routers.monitoring-minio.entrypoints=web"
+      - "traefik.http.routers.monitoring-minio.service=monitoring-minio"
+      - "traefik.http.services.monitoring-minio.loadbalancer.server.port=9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  minio-init:
+    image: "{{ monitoring_minio_init_image }}"
+    container_name: monitoring-minio-init
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: "{{ vault_monitoring_minio_root_user }}"
+      MINIO_ROOT_PASSWORD: "{{ vault_monitoring_minio_root_password }}"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
+        mc mb --ignore-existing local/{{ monitoring_mimir_bucket }}
+        mc mb --ignore-existing local/{{ monitoring_loki_bucket }}
+        mc mb --ignore-existing local/{{ monitoring_tempo_bucket }}
+    networks:
+      - monitoring_net
+
+  mimir-1:
+    image: "{{ monitoring_mimir_image }}"
+    container_name: monitoring-mimir-1
+    restart: unless-stopped
+    command:
+      - "-target=all"
+      - "-config.file=/etc/mimir/mimir.yml"
+    volumes:
+      - "{{ monitoring_stack_dir }}/mimir/mimir.yml:/etc/mimir/mimir.yml:ro"
+      - mimir-1-data:/data
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    networks:
+      - monitoring_net
+
+  mimir-2:
+    image: "{{ monitoring_mimir_image }}"
+    container_name: monitoring-mimir-2
+    restart: unless-stopped
+    command:
+      - "-target=all"
+      - "-config.file=/etc/mimir/mimir.yml"
+    volumes:
+      - "{{ monitoring_stack_dir }}/mimir/mimir.yml:/etc/mimir/mimir.yml:ro"
+      - mimir-2-data:/data
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    networks:
+      - monitoring_net
+
+  mimir-3:
+    image: "{{ monitoring_mimir_image }}"
+    container_name: monitoring-mimir-3
+    restart: unless-stopped
+    command:
+      - "-target=all"
+      - "-config.file=/etc/mimir/mimir.yml"
+    volumes:
+      - "{{ monitoring_stack_dir }}/mimir/mimir.yml:/etc/mimir/mimir.yml:ro"
+      - mimir-3-data:/data
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    networks:
+      - monitoring_net
+
+  mimir-lb:
+    image: "{{ monitoring_mimir_lb_image }}"
+    container_name: monitoring-mimir-lb
+    restart: unless-stopped
+    volumes:
+      - "{{ monitoring_stack_dir }}/mimir/nginx.conf:/etc/nginx/conf.d/default.conf:ro"
+    depends_on:
+      - mimir-1
+      - mimir-2
+      - mimir-3
+    networks:
+      - monitoring_net
+
+  tempo:
+    image: "{{ monitoring_tempo_image }}"
+    container_name: monitoring-tempo
+    restart: unless-stopped
+    command:
+      - "-config.file=/etc/tempo/tempo.yml"
+    volumes:
+      - "{{ monitoring_stack_dir }}/tempo/tempo.yml:/etc/tempo/tempo.yml:ro"
+      - tempo-data:/var/tempo
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    networks:
+      - monitoring_net
+
 networks:
   monitoring_net:
     name: monitoring_net
@@ -156,6 +295,16 @@ volumes:
   alertmanager-data:
     name: monitoring_alertmanager_data
   loki-data:
-    name: monitoring_loki_data
+    name: monitoring_loki-data
   alloy-data:
     name: monitoring_alloy_data
+  minio-data:
+    name: monitoring_minio_data
+  mimir-1-data:
+    name: monitoring_mimir_1_data
+  mimir-2-data:
+    name: monitoring_mimir_2_data
+  mimir-3-data:
+    name: monitoring_mimir_3_data
+  tempo-data:
+    name: monitoring_tempo_data

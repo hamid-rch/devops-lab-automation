@@ -1,0 +1,17 @@
+upstream mimir_backend {
+    least_conn;
+    server mimir-1:9009;
+    server mimir-2:9009;
+    server mimir-3:9009;
+}
+
+server {
+    listen 9009;
+
+    location / {
+        proxy_pass http://mimir_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Scope-OrgID $http_x_scope_orgid;
+    }
+}
