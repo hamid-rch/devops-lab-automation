@@ -1,0 +1,41 @@
+---
+gitlab_stack_dir: /home/vagrant/cicd
+gitlab_image: gitlab/gitlab-ce:19.4.5-ce.0
+gitlab_container_name: gitlab_container
+gitlab_hostname: gitlab.local
+gitlab_external_url: http://gitlab.local
+gitlab_data_root: /data/gitlab
+gitlab_http_port: 80
+gitlab_https_port: 443
+gitlab_ssh_port: 22
+gitlab_timezone: UTC
+gitlab_mimir_host: mimir.lab
+gitlab_mimir_ip: 192.168.56.33
+gitlab_mimir_tenant: anonymous
+gitlab_metrics_source: gitlab
+gitlab_metrics_environment: lab
+gitlab_metrics_server: 192.168.56.34
+gitlab_shm_size: 512m
+gitlab_network_name: gitlab-network
+
+
+# Grafana Alloy
+gitlab_alloy_enabled: true
+gitlab_alloy_image: "grafana/alloy:v1.21.2"
+gitlab_alloy_container_name: "gitlab-alloy"
+
+gitlab_alloy_config_dir: "/opt/gitlab-alloy"
+gitlab_alloy_storage_dir: "/opt/gitlab-alloy/data"
+
+gitlab_logs_host_dir: "/data/gitlab/logs"
+gitlab_alloy_logs_dir: "/var/log/gitlab"
+
+gitlab_alloy_loki_url: "http://{{ monitoring_loki_hostname }}/loki/api/v1/push"
+
+gitlab_alloy_job: "gitlab"
+gitlab_alloy_environment: "lab"
+gitlab_alloy_instance: "{{ inventory_hostname }}"
+
+gitlab_alloy_file_pattern: "**/*.log"
+gitlab_alloy_tail_from_end: true
+gitlab_alloy_sync_period: "10s"

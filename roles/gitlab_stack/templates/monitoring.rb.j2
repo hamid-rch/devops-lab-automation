@@ -1,0 +1,14 @@
+# Managed by Ansible (gitlab_stack role)
+# Prometheus bundled with GitLab sends its scraped metrics to Mimir.
+prometheus['enable'] = true
+prometheus['remote_write'] = [
+  {
+    'url' => {{ ('http://' ~ gitlab_mimir_host ~ '/api/v1/push') | to_json }},
+    'headers' => { 'X-Scope-OrgID' => {{ gitlab_mimir_tenant | to_json }} }
+  }
+]
+prometheus['external_labels'] = {
+  'source' => {{ gitlab_metrics_source | to_json }},
+  'environment' => {{ gitlab_metrics_environment | to_json }},
+  'server' => {{ gitlab_metrics_server | to_json }}
+}

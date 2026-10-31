@@ -266,6 +266,12 @@ services:
       - mimir-3
     networks:
       - monitoring_net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mimir-write.rule=Host(`mimir.lab`) && Path(`/api/v1/push`)"
+      - "traefik.http.routers.mimir-write.entrypoints=web"
+      - "traefik.http.routers.mimir-write.service=mimir-write"
+      - "traefik.http.services.mimir-write.loadbalancer.server.port=9009"
 
   tempo:
     image: "{{ monitoring_tempo_image }}"

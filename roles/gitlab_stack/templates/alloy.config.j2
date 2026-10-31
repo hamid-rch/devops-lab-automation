@@ -1,0 +1,24 @@
+local.file_match "gitlab_logs" {
+  path_targets = [
+    {
+      __path__    = "{{ gitlab_alloy_logs_dir }}/{{ gitlab_alloy_file_pattern }}",
+      job         = "{{ gitlab_alloy_job }}",
+      environment = "{{ gitlab_alloy_environment }}",
+      instance    = "{{ gitlab_alloy_instance }}",
+    },
+  ]
+
+  sync_period = "{{ gitlab_alloy_sync_period }}"
+}
+
+loki.source.file "gitlab_logs" {
+  targets       = local.file_match.gitlab_logs.targets
+  forward_to    = [loki.write.central.receiver]
+  tail_from_end = {{ gitlab_alloy_tail_from_end | lower }}
+}
+
+loki.write "central" {
+  endpoint {
+    url = "{{ gitlab_alloy_loki_url }}"
+  }
+}

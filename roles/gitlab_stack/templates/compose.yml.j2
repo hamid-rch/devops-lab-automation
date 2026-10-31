@@ -1,0 +1,62 @@
+
+services:
+  gitlab:
+    image: {{ gitlab_image | to_json }}
+    container_name: {{ gitlab_container_name | to_json }}
+    hostname: {{ gitlab_hostname | to_json }}
+    restart: unless-stopped
+
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url {{ gitlab_external_url | to_json }}
+        gitlab_rails['gitlab_shell_ssh_port'] = {{ gitlab_ssh_port }}
+        gitlab_rails['time_zone'] = {{ gitlab_timezone | to_json }}
+        nginx['listen_port'] = 80
+        nginx['listen_https'] = false
+        letsencrypt['enable'] = false
+
+    ports:
+      - {{ (gitlab_http_port | string ~ ':80') | to_json }}
+      - {{ (gitlab_https_port | string ~ ':443') | to_json }}
+      - {{ (gitlab_ssh_port | string ~ ':22') | to_json }}
+
+    extra_hosts:
+      - {{ (gitlab_mimir_host ~ ':' ~ gitlab_mimir_ip) | to_json }}
+
+    volumes:
+      - {{ (gitlab_data_root ~ '/config:/etc/gitlab') | to_json }}
+      - {{ (gitlab_data_root ~ '/logs:/var/log/gitlab') | to_json }}
+      - {{ (gitlab_data_root ~ '/data:/var/opt/gitlab') | to_json }}
+
+    networks:
+      - gitlab-network
+
+    shm_size: {{ gitlab_shm_size | to_json }}
+
+{% if gitlab_alloy_enabled | bool %}
+  alloy:
+    image: {{ gitlab_alloy_image | to_json }}
+    container_name: {{ gitlab_alloy_container_name | to_json }}
+    restart: unless-stopped
+    user: "0:0"
+
+    command:
+      - run
+      - --storage.path=/var/lib/alloy
+      - /etc/alloy/config.alloy
+
+    volumes:
+      - {{ (gitlab_alloy_config_dir ~ '/alloy.config:/etc/alloy/config.alloy:ro') | to_json }}
+      - {{ (gitlab_logs_host_dir ~ ':' ~ gitlab_alloy_logs_dir ~ ':ro') | to_json }}
+      - {{ (gitlab_alloy_storage_dir ~ ':/var/lib/alloy') | to_json }}
+
+    extra_hosts:
+      - {{ (monitoring_loki_hostname ~ ':' ~ monitoring_server_ip) | to_json }}
+
+    networks:
+      - gitlab-network
+{% endif %}
+
+networks:
+  gitlab-network:
+    name: {{ gitlab_network_name | to_json }}
