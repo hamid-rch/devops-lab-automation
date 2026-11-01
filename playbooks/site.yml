@@ -1,11 +1,14 @@
 ---
-- name: Deploy Docker Tools Stack on ubuntu2404F
+- name: Deploy GitLab Server
   hosts: gitlab
   become: true
 
   roles:
-    #- docker
-    #- tools_stack
-    #- elk_stack
-    # - monitoring_stack
+    - gitlab_stack
+
+- name: Deploy GitLab Runner
+  hosts: gitlab_runner
+  become: true
+
+  roles:
     - gitlab_stack

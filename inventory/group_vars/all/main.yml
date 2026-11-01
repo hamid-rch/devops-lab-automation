@@ -3,3 +3,5 @@ monitoring_server_ip: "192.168.56.33"
 
 # Monitoring service hostnames
 monitoring_loki_hostname: "loki.lab"
+
+monitoring_tenant_id: "anonymous"

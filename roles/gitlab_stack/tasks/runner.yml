@@ -1,0 +1,98 @@
+---
+- name: Create Runner Alloy directory
+  ansible.builtin.file:
+    path: "{{ gitlab_runner_alloy_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: gitlab_runner_alloy_enabled | bool
+
+- name: Ensure Runner metrics and concurrency settings
+  ansible.builtin.lineinfile:
+    path: "{{ gitlab_runner_config_dir }}/config.toml"
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    insertafter: "{{ item.insertafter }}"
+    backup: true
+  loop:
+    - regexp: '^listen_address\s*='
+      line: 'listen_address = "0.0.0.0:{{ gitlab_runner_metrics_port }}"'
+      insertafter: '^concurrent\s*='
+    - regexp: '^\s*request_concurrency\s*='
+      line: '  request_concurrency = {{ gitlab_runner_request_concurrency }}'
+      insertafter: '^\[\[runners\]\]$'
+  register: runner_config_changes
+
+- name: Deploy Runner Alloy configuration
+  ansible.builtin.template:
+    src: runner-alloy.config.j2
+    dest: "{{ gitlab_runner_alloy_dir }}/config.alloy"
+    owner: root
+    group: root
+    mode: "0644"
+  register: runner_alloy_config
+  when: gitlab_runner_alloy_enabled | bool
+
+- name: Deploy Runner Docker Compose
+  ansible.builtin.template:
+    src: runner-compose.yml.j2
+    dest: "{{ gitlab_runner_stack_dir }}/docker-compose.yml"
+    owner: root
+    group: root
+    mode: "0644"
+    validate: "docker compose -f %s config --quiet"
+  register: runner_compose_config
+
+- name: Validate Runner Docker Compose
+  ansible.builtin.command:
+    cmd: docker compose -f docker-compose.yml config --quiet
+    chdir: "{{ gitlab_runner_stack_dir }}"
+  changed_when: false
+
+- name: Apply Runner stack
+  ansible.builtin.command:
+    cmd: docker compose -f docker-compose.yml up -d
+    chdir: "{{ gitlab_runner_stack_dir }}"
+  register: runner_compose_up
+  changed_when: >-
+    'Started' in runner_compose_up.stderr or
+    'Created' in runner_compose_up.stderr or
+    'Recreated' in runner_compose_up.stderr
+
+- name: Restart Runner when config.toml changes
+  ansible.builtin.command:
+    argv:
+      - docker
+      - restart
+      - "{{ gitlab_runner_container_name }}"
+  when: runner_config_changes.changed
+  changed_when: true
+
+- name: Restart Alloy when configuration changes
+  ansible.builtin.command:
+    argv:
+      - docker
+      - restart
+      - "{{ gitlab_runner_alloy_container_name }}"
+  when:
+    - gitlab_runner_alloy_enabled | bool
+    - runner_alloy_config.changed
+  changed_when: true
+
+- name: Verify Runner metrics endpoint
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "container:{{ gitlab_runner_container_name }}"
+      - curlimages/curl:latest
+      - -fsS
+      - "http://127.0.0.1:{{ gitlab_runner_metrics_port }}/metrics"
+  register: runner_metrics
+  retries: 10
+  delay: 3
+  until: runner_metrics.rc == 0
+  changed_when: false

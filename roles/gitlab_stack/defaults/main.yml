@@ -39,3 +39,26 @@ gitlab_alloy_instance: "{{ inventory_hostname }}"
 gitlab_alloy_file_pattern: "**/*.log"
 gitlab_alloy_tail_from_end: true
 gitlab_alloy_sync_period: "10s"
+
+
+# GitLab Runner
+gitlab_runner_image: "gitlab/gitlab-runner:ubuntu-v19.4.3"
+gitlab_runner_container_name: "gitlab-runner"
+gitlab_runner_stack_dir: "/home/vagrant/gitlab-runner"
+gitlab_runner_config_dir: "/data/gitlab-runner/config"
+monitoring_mimir_hostname: mimir.lab
+
+gitlab_runner_gitlab_hostname: "gitlab.local"
+gitlab_runner_gitlab_ip: "192.168.56.34"
+
+gitlab_runner_metrics_port: 9252
+gitlab_runner_request_concurrency: 2
+
+# Alloy
+gitlab_runner_alloy_enabled: true
+gitlab_runner_alloy_image: "grafana/alloy:v1.21.2"
+gitlab_runner_alloy_container_name: "runner-alloy"
+gitlab_runner_alloy_dir: "/opt/gitlab-runner-alloy"
+
+# Docker Socket Proxy
+gitlab_runner_socket_proxy_image: "tecnativa/docker-socket-proxy:master"

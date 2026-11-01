@@ -1,0 +1,76 @@
+services:
+  gitlab-runner:
+    image: {{ gitlab_runner_image | to_json }}
+    container_name: {{ gitlab_runner_container_name | to_json }}
+    restart: unless-stopped
+
+    environment:
+      TZ: UTC
+
+    volumes:
+      - {{ (gitlab_runner_config_dir ~ ':/etc/gitlab-runner') | to_json }}
+      - /var/run/docker.sock:/var/run/docker.sock
+
+    extra_hosts:
+      - {{ (gitlab_runner_gitlab_hostname ~ ':' ~ gitlab_runner_gitlab_ip) | to_json }}
+
+    networks:
+      - runner-net
+
+{% if gitlab_runner_alloy_enabled %}
+  docker-socket-proxy:
+    image: {{ gitlab_runner_socket_proxy_image | to_json }}
+    container_name: runner-docker-socket-proxy
+    restart: unless-stopped
+
+    environment:
+      CONTAINERS: "1"
+      NETWORKS: "1"
+      EVENTS: "1"
+      INFO: "1"
+      PING: "1"
+      VERSION: "1"
+      POST: "0"
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+    networks:
+      - runner-net
+
+    security_opt:
+      - no-new-privileges:true
+
+  alloy:
+    image: {{ gitlab_runner_alloy_image | to_json }}
+    container_name: {{ gitlab_runner_alloy_container_name | to_json }}
+    restart: unless-stopped
+
+    command:
+      - run
+      - --storage.path=/var/lib/alloy
+      - /etc/alloy/config.alloy
+
+    volumes:
+      - {{ (gitlab_runner_alloy_dir ~ '/config.alloy:/etc/alloy/config.alloy:ro') | to_json }}
+      - runner-alloy-data:/var/lib/alloy
+
+    extra_hosts:
+      - {{ (monitoring_mimir_hostname ~ ':' ~ monitoring_server_ip) | to_json }}
+      - {{ (monitoring_loki_hostname ~ ':' ~ monitoring_server_ip) | to_json }}
+
+    networks:
+      - runner-net
+
+    depends_on:
+      - gitlab-runner
+      - docker-socket-proxy
+{% endif %}
+
+networks:
+  runner-net:
+
+{% if gitlab_runner_alloy_enabled %}
+volumes:
+  runner-alloy-data:
+{% endif %}

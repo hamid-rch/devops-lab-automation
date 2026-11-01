@@ -1,0 +1,62 @@
+prometheus.scrape "gitlab_runner" {
+  targets = [
+    {
+      __address__ = "{{ gitlab_runner_container_name }}:{{ gitlab_runner_metrics_port }}",
+      job = "gitlab-runner",
+      instance = "{{ inventory_hostname }}",
+      environment = "lab",
+    },
+  ]
+
+  forward_to = [prometheus.remote_write.mimir.receiver]
+}
+
+prometheus.remote_write "mimir" {
+  endpoint {
+    url = "http://{{ monitoring_mimir_hostname }}/api/v1/push"
+
+    headers = {
+      "X-Scope-OrgID" = "{{ monitoring_tenant_id }}",
+    }
+  }
+}
+
+discovery.docker "runner" {
+  host = "tcp://docker-socket-proxy:2375"
+
+  filter {
+    name = "name"
+    values = ["{{ gitlab_runner_container_name }}"]
+  }
+}
+
+discovery.relabel "runner_logs" {
+  targets = discovery.docker.runner.targets
+
+  rule {
+    target_label = "job"
+    replacement = "gitlab-runner"
+  }
+
+  rule {
+    target_label = "instance"
+    replacement = "{{ inventory_hostname }}"
+  }
+
+  rule {
+    target_label = "environment"
+    replacement = "lab"
+  }
+}
+
+loki.source.docker "runner" {
+  host = "tcp://docker-socket-proxy:2375"
+  targets = discovery.relabel.runner_logs.output
+  forward_to = [loki.write.central.receiver]
+}
+
+loki.write "central" {
+  endpoint {
+    url = "http://{{ monitoring_loki_hostname }}/loki/api/v1/push"
+  }
+}
