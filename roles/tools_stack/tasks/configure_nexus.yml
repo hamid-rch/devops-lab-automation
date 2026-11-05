@@ -1,27 +1,45 @@
+---
+# Nexus is reached through Traefik. Use the VM IP in the URL (the certificate
+# includes that IP in its SAN) and the virtual hostname in the HTTP Host header.
+# This avoids relying on nexus.lab being present in the VM's DNS or /etc/hosts.
 
 - name: Wait for Nexus to become writable
   ansible.builtin.uri:
-    url: "http://127.0.0.1/service/rest/v1/status/writable"
+    url: "{{ nexus_api_base_url }}/service/rest/v1/status/writable"
     method: GET
     headers:
       Host: "{{ nexus_hostname }}"
-    status_code: 200
+      Accept: application/json
+    status_code:
+      - 200
+      - 502
+      - 503
+      - 504
+      - 404
+    validate_certs: "{{ tools_stack_tls_enabled | bool }}"
+    use_proxy: false
+    ca_path: "{{ (tools_stack_certificate_remote_dir ~ '/lab-root-ca.crt') if (tools_stack_tls_enabled | bool) else omit }}"
     return_content: false
+    timeout: 15
   register: nexus_ready
   until: nexus_ready.status | default(0) == 200
-  retries: 60
-  delay: 10
+  retries: "{{ nexus_startup_retries }}"
+  delay: "{{ nexus_startup_delay }}"
   changed_when: false
 
 - name: Check whether the configured Nexus password works
   ansible.builtin.uri:
-    url: "http://127.0.0.1/service/rest/v1/repositories"
+    url: "{{ nexus_api_base_url }}/service/rest/v1/repositories"
     method: GET
     headers:
       Host: "{{ nexus_hostname }}"
+      Accept: application/json
     url_username: admin
     url_password: "{{ nexus_admin_password }}"
     force_basic_auth: true
+    validate_certs: "{{ tools_stack_tls_enabled | bool }}"
+    use_proxy: false
+    ca_path: "{{ (tools_stack_certificate_remote_dir ~ '/lab-root-ca.crt') if (tools_stack_tls_enabled | bool) else omit }}"
     status_code:
       - 200
       - 401
@@ -41,14 +59,17 @@
 
 - name: Change initial Nexus admin password
   ansible.builtin.uri:
-    url: "http://127.0.0.1/service/rest/internal/ui/onboarding/change-admin-password"
+    url: "{{ nexus_api_base_url }}/service/rest/internal/ui/onboarding/change-admin-password"
     method: PUT
     headers:
       Host: "{{ nexus_hostname }}"
       Content-Type: "text/plain"
-    user: admin
-    password: "{{ nexus_initial_password.stdout | trim }}"
+    url_username: admin
+    url_password: "{{ nexus_initial_password.stdout | trim }}"
     force_basic_auth: true
+    validate_certs: "{{ tools_stack_tls_enabled | bool }}"
+    use_proxy: false
+    ca_path: "{{ (tools_stack_certificate_remote_dir ~ '/lab-root-ca.crt') if (tools_stack_tls_enabled | bool) else omit }}"
     body: "{{ nexus_admin_password }}"
     status_code:
       - 200

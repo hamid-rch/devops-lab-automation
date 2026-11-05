@@ -1,3 +1,4 @@
+# Complete Docker Compose definition for the tools stack.
 services:
   traefik:
     image: "{{ traefik_image }}"
@@ -11,12 +12,24 @@ services:
       - "--providers.file.filename=/etc/traefik/dynamic.yml"
       - "--providers.file.watch=true"
       - "--entrypoints.web.address=:80"
+{% if tools_stack_tls_enabled | bool %}
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entrypoints.web.http.redirections.entrypoint.permanent=true"
+{% endif %}
     ports:
-      - "{{ traefik_http_port }}:80"
+      - "{{ traefik_http_port | default(80) }}:80"
+{% if tools_stack_tls_enabled | bool %}
+      - "{{ traefik_https_port | default(443) }}:443"
+{% endif %}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - "{{ tools_stack_dir }}/traefik_dynamic.yml:/etc/traefik/dynamic.yml:ro"
       - "{{ tools_stack_dir }}/traefik_users:/etc/traefik/traefik_users:ro"
+{% if tools_stack_tls_enabled | bool %}
+      - "{{ tools_stack_dir }}/certs:/etc/traefik/certs:ro"
+{% endif %}
     networks:
       - tools_net
     security_opt:
@@ -24,7 +37,12 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.traefik-dashboard.rule=Host(`{{ traefik_dashboard_hostname }}`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))"
+{% if tools_stack_tls_enabled | bool %}
+      - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
+      - "traefik.http.routers.traefik-dashboard.tls=true"
+{% else %}
       - "traefik.http.routers.traefik-dashboard.entrypoints=web"
+{% endif %}
       - "traefik.http.routers.traefik-dashboard.service=api@internal"
       - "traefik.http.routers.traefik-dashboard.middlewares=traefik-dashboard-auth@file"
 
@@ -39,7 +57,12 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.nexus.rule=Host(`{{ nexus_hostname }}`)"
+{% if tools_stack_tls_enabled | bool %}
+      - "traefik.http.routers.nexus.entrypoints=websecure"
+      - "traefik.http.routers.nexus.tls=true"
+{% else %}
       - "traefik.http.routers.nexus.entrypoints=web"
+{% endif %}
       - "traefik.http.services.nexus.loadbalancer.server.port=8081"
 
   minio:
@@ -60,14 +83,19 @@ services:
       - tools_net
     labels:
       - "traefik.enable=true"
-
       - "traefik.http.routers.minio-api.rule=Host(`{{ minio_api_hostname }}`)"
+{% if tools_stack_tls_enabled | bool %}
+      - "traefik.http.routers.minio-api.entrypoints=websecure"
+      - "traefik.http.routers.minio-api.tls=true"
+      - "traefik.http.routers.minio-console.entrypoints=websecure"
+      - "traefik.http.routers.minio-console.tls=true"
+{% else %}
       - "traefik.http.routers.minio-api.entrypoints=web"
+      - "traefik.http.routers.minio-console.entrypoints=web"
+{% endif %}
       - "traefik.http.routers.minio-api.service=minio-api"
       - "traefik.http.services.minio-api.loadbalancer.server.port=9000"
-
       - "traefik.http.routers.minio-console.rule=Host(`{{ minio_console_hostname }}`)"
-      - "traefik.http.routers.minio-console.entrypoints=web"
       - "traefik.http.routers.minio-console.service=minio-console"
       - "traefik.http.services.minio-console.loadbalancer.server.port=9001"
 

@@ -1,20 +1,54 @@
 ---
 tools_stack_dir: /opt/tools-stack
 
-traefik_image: "traefik:v3.7.16"
-nexus_image: "sonatype/nexus3:3.97.1"
+traefik_image: "traefik:v3.7.17"
+nexus_image: "sonatype/nexus3:3.98.0"
 
 # Fixed tag, not "latest".
 # This is a legacy release, not a claim of being the newest MinIO.
 # minio_image: "quay-mirror.liara.ir/minio/aistor/minio:RELEASE.2026-09-19T17-05-25Z"
 minio_image: "docker.io/pgsty/minio:RELEASE.2026-08-04T00-00-00Z"
 
+# TLS is opt-in for this lab. When false, Traefik serves plain HTTP on port 80.
+# Set true to generate/deploy the local lab CA and enable HTTPS on port 443.
+tools_stack_tls_enabled: false
+
 traefik_http_port: 80
 
 nexus_hostname: "nexus.lab"
+# Internal Ansible API calls go to the VM IP to avoid requiring nexus.lab DNS
+# resolution on the VM itself. Traefik still routes using the Host header.
+# Ansible runs on the toolsStack VM. In HTTP mode it reaches Traefik locally;
+# the Host header in the URI tasks still selects the Nexus router.
+nexus_api_base_url: "{{ 'https://' ~ tools_stack_certificate_target if (tools_stack_tls_enabled | bool) else 'http://127.0.0.1' }}"
+nexus_startup_retries: 120
+nexus_startup_delay: 10
 minio_api_hostname: "minio.lab"
 minio_console_hostname: "minio-console.lab"
 
 # Traefik dashboard access. Set vault_traefik_dashboard_password in Ansible Vault.
 traefik_dashboard_hostname: "traefik.lab"
 traefik_dashboard_username: "admin"
+traefik_https_port: 443
+
+# TLS / Certificate settings
+tools_stack_certificate_target: "192.168.56.30"
+
+tools_stack_ca_dir: "{{ playbook_dir }}/.certs/tools_stack"
+tools_stack_certificate_remote_dir: "{{ tools_stack_dir | default('/opt/tools-stack') }}/certs"
+
+tools_stack_ca_common_name: "Tools Stack Lab Root CA"
+tools_stack_certificate_common_name: "nexus.lab"
+
+tools_stack_ca_validity_days: 3650
+tools_stack_server_cert_validity_days: 825
+
+tools_stack_certificate_dns_names:
+  - "nexus.lab"
+  - "traefik.lab"
+  - "minio.lab"
+  - "minio-console.lab"
+
+tools_stack_certificate_ip_addresses:
+  - "192.168.56.30"
+  

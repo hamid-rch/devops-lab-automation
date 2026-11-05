@@ -1,3 +1,19 @@
+# Dynamic Traefik configuration.
+{% if tools_stack_tls_enabled | bool %}
+# The lab certificate is generated and deployed only when TLS is enabled.
+tls:
+  certificates:
+    - certFile: /etc/traefik/certs/lab-services.crt
+      keyFile: /etc/traefik/certs/lab-services.key
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /etc/traefik/certs/lab-services.crt
+        keyFile: /etc/traefik/certs/lab-services.key
+  options:
+    default:
+      minVersion: VersionTLS12
+{% endif %}
 http:
   middlewares:
     traefik-dashboard-auth:

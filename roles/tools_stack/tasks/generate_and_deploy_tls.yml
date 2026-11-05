@@ -1,0 +1,205 @@
+---
+# Generate a private lab CA and a Traefik server certificate on the Ansible
+# control node, then deploy only the public CA certificate and server
+# certificate/key to 192.168.56.30.
+#
+# The CA private key intentionally stays on the control node.
+
+- name: Validate certificate deployment target
+  ansible.builtin.assert:
+    that:
+      - (ansible_host | default(inventory_hostname)) == tools_stack_certificate_target
+    fail_msg: >-
+      This task must run against {{ tools_stack_certificate_target }}.
+      Current target is {{ ansible_host | default(inventory_hostname) }}.
+  run_once: true
+
+- name: Check OpenSSL on the Ansible control node
+  ansible.builtin.command: openssl version
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  run_once: true
+
+- name: Create local directory for the lab CA
+  ansible.builtin.file:
+    path: "{{ tools_stack_ca_dir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Generate the lab root CA (only if it does not exist)
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - req
+      - -x509
+      - -newkey
+      - rsa:4096
+      - -sha256
+      - -days
+      - "{{ tools_stack_ca_validity_days | string }}"
+      - -nodes
+      - -keyout
+      - "{{ tools_stack_ca_dir }}/lab-root-ca.key"
+      - -out
+      - "{{ tools_stack_ca_dir }}/lab-root-ca.crt"
+      - -subj
+      - "/CN={{ tools_stack_ca_common_name }}"
+      - -addext
+      - "basicConstraints=critical,CA:TRUE"
+      - -addext
+      - "keyUsage=critical,keyCertSign,cRLSign"
+  args:
+    creates: "{{ tools_stack_ca_dir }}/lab-root-ca.crt"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  no_log: true
+
+- name: Restrict permissions on the local CA private key
+  ansible.builtin.file:
+    path: "{{ tools_stack_ca_dir }}/lab-root-ca.key"
+    state: file
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  no_log: true
+
+- name: Generate the Traefik server private key and CSR (if needed)
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - req
+      - -new
+      - -newkey
+      - rsa:3072
+      - -nodes
+      - -keyout
+      - "{{ tools_stack_ca_dir }}/lab-services.key"
+      - -out
+      - "{{ tools_stack_ca_dir }}/lab-services.csr"
+      - -subj
+      - "/CN={{ tools_stack_certificate_common_name }}"
+  args:
+    creates: "{{ tools_stack_ca_dir }}/lab-services.csr"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  no_log: true
+
+- name: Create OpenSSL extensions file for the server certificate
+  ansible.builtin.copy:
+    dest: "{{ tools_stack_ca_dir }}/lab-services.ext"
+    mode: "0600"
+    content: |
+      [v3_server]
+      basicConstraints = critical,CA:FALSE
+      keyUsage = critical,digitalSignature,keyEncipherment
+      extendedKeyUsage = serverAuth
+      subjectAltName = @alt_names
+
+      [alt_names]
+      {% for dns_name in tools_stack_certificate_dns_names %}
+      DNS.{{ loop.index }} = {{ dns_name }}
+      {% endfor %}
+      {% for ip_address in tools_stack_certificate_ip_addresses %}
+      IP.{{ loop.index }} = {{ ip_address }}
+      {% endfor %}
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Sign the Traefik server certificate with the lab CA (if needed)
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - x509
+      - -req
+      - -in
+      - "{{ tools_stack_ca_dir }}/lab-services.csr"
+      - -CA
+      - "{{ tools_stack_ca_dir }}/lab-root-ca.crt"
+      - -CAkey
+      - "{{ tools_stack_ca_dir }}/lab-root-ca.key"
+      - -CAcreateserial
+      - -out
+      - "{{ tools_stack_ca_dir }}/lab-services.crt"
+      - -days
+      - "{{ tools_stack_server_cert_validity_days | string }}"
+      - -sha256
+      - -extfile
+      - "{{ tools_stack_ca_dir }}/lab-services.ext"
+      - -extensions
+      - v3_server
+  args:
+    creates: "{{ tools_stack_ca_dir }}/lab-services.crt"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  no_log: true
+
+- name: Restrict permissions on the local server private key
+  ansible.builtin.file:
+    path: "{{ tools_stack_ca_dir }}/lab-services.key"
+    state: file
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  no_log: true
+
+- name: Create certificate directory on the tools stack server
+  ansible.builtin.file:
+    path: "{{ tools_stack_certificate_remote_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+  become: true
+  run_once: true
+
+- name: Copy the public lab root CA certificate to the server
+  ansible.builtin.copy:
+    src: "{{ tools_stack_ca_dir }}/lab-root-ca.crt"
+    dest: "{{ tools_stack_certificate_remote_dir }}/lab-root-ca.crt"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  run_once: true
+
+- name: Copy the Traefik server certificate to the server
+  ansible.builtin.copy:
+    src: "{{ tools_stack_ca_dir }}/lab-services.crt"
+    dest: "{{ tools_stack_certificate_remote_dir }}/lab-services.crt"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  run_once: true
+
+- name: Copy the Traefik server private key to the server
+  ansible.builtin.copy:
+    src: "{{ tools_stack_ca_dir }}/lab-services.key"
+    dest: "{{ tools_stack_certificate_remote_dir }}/lab-services.key"
+    owner: root
+    group: root
+    mode: "0600"
+  become: true
+  run_once: true
+
+- name: Verify the deployed server certificate
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - verify
+      - -CAfile
+      - "{{ tools_stack_certificate_remote_dir }}/lab-root-ca.crt"
+      - "{{ tools_stack_certificate_remote_dir }}/lab-services.crt"
+  become: true
+  changed_when: false
+  run_once: true

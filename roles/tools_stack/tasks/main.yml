@@ -1,4 +1,8 @@
 ---
+- name: Generate and deploy TLS certificates when TLS is enabled
+  ansible.builtin.import_tasks: generate_and_deploy_tls.yml
+  when: tools_stack_tls_enabled | bool
+
 - name: Configure Traefik files and dashboard authentication
   ansible.builtin.import_tasks: configure_traefik.yml
 
@@ -29,3 +33,6 @@
 
 - name: Configure Nexus
   ansible.builtin.import_tasks: configure_nexus.yml
+
+- name: Configure Nexus repositories
+  ansible.builtin.import_tasks: configure_nexus_repositories.yml

@@ -1,14 +1,14 @@
 ---
-- name: Deploy GitLab Server
-  hosts: gitlab
+# - name: Install Docker
+#   hosts: tools_stack
+#   become: true
+
+#   roles:
+#     - docker
+
+- name: install nexus and minio and traefik
+  hosts: toolsStack
   become: true
 
   roles:
-    - gitlab_stack
-
-- name: Deploy GitLab Runner
-  hosts: gitlab_runner
-  become: true
-
-  roles:
-    - gitlab_stack
+    - tools_stack

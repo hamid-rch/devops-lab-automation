@@ -1,0 +1,460 @@
+---
+# Nexus 3.98 repository and file-blob-store provisioning.
+#
+# Import this file from tasks/main.yml AFTER configure_nexus.yml:
+#   - name: Configure Nexus repositories
+#     ansible.builtin.import_tasks: configure_nexus_repositories.yml
+#
+# Existing blob stores and custom repositories are not modified. Missing blob
+# stores/repositories are created; selected stock Maven/NuGet repositories are
+# removed when present. The operations are safe to repeat.
+#
+# Required variables already used by the current project:
+#   nexus_hostname
+#   nexus_admin_password
+#   tools_stack_tls_enabled (false = HTTP lab mode, true = HTTPS with the lab CA)
+#   tools_stack_certificate_remote_dir (required only when TLS is enabled)
+
+- name: Validate Nexus repository provisioning settings
+  ansible.builtin.assert:
+    that:
+      - nexus_hostname is defined
+      - nexus_admin_password is defined
+      - tools_stack_tls_enabled is defined
+      - not (tools_stack_tls_enabled | bool) or tools_stack_certificate_remote_dir is defined
+    fail_msg: >-
+      Define nexus_hostname, nexus_admin_password and tools_stack_tls_enabled.
+      When TLS is enabled, also define tools_stack_certificate_remote_dir.
+
+- name: Build Nexus API base URL from the selected TLS mode
+  ansible.builtin.set_fact:
+    tools_stack_nexus_api_base_url: >-
+      {{ ('https://' if (tools_stack_tls_enabled | bool) else 'http://') ~ nexus_hostname }}
+  changed_when: false
+
+- name: Read existing Nexus blob stores
+  ansible.builtin.uri:
+    url: "{{ tools_stack_nexus_api_base_url }}/service/rest/v1/blobstores"
+    method: GET
+    validate_certs: "{{ tools_stack_tls_enabled | bool }}"
+    use_proxy: false
+    ca_path: "{{ (tools_stack_certificate_remote_dir ~ '/lab-root-ca.crt') if (tools_stack_tls_enabled | bool) else omit }}"
+    headers:
+      Host: "{{ nexus_hostname }}"
+      Accept: application/json
+    url_username: admin
+    url_password: "{{ nexus_admin_password }}"
+    force_basic_auth: true
+    status_code: 200
+    return_content: true
+  register: nexus_blobstores
+  changed_when: false
+
+- name: Create dedicated file blob stores when missing
+  ansible.builtin.uri:
+    url: "{{ tools_stack_nexus_api_base_url }}/service/rest/v1/blobstores/file"
+    method: POST
+    validate_certs: "{{ tools_stack_tls_enabled | bool }}"
+    use_proxy: false
+    ca_path: "{{ (tools_stack_certificate_remote_dir ~ '/lab-root-ca.crt') if (tools_stack_tls_enabled | bool) else omit }}"
+    headers:
+      Host: "{{ nexus_hostname }}"
+      Content-Type: application/json
+      Accept: application/json
+    url_username: admin
+    url_password: "{{ nexus_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    body:
+      name: "{{ item.name }}"
+      path: "{{ item.path }}"
+    status_code:
+      - 200
+      - 201
+      - 204
+    return_content: false
+  loop:
+    - name: docker-proxy-data
+      path: /nexus-data/blobs/docker-proxy-data
+    - name: docker-hosted-data
+      path: /nexus-data/blobs/docker-hosted-data
+    - name: apt-data
+      path: /nexus-data/blobs/apt-data
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.name not in (nexus_blobstores.json | map(attribute='name') | list)
+
+- name: Read existing Nexus repositories
+  ansible.builtin.uri:
+    url: "{{ tools_stack_nexus_api_base_url }}/service/rest/v1/repositories"
+    method: GET
+    validate_certs: "{{ tools_stack_tls_enabled | bool }}"
+    use_proxy: false
+    ca_path: "{{ (tools_stack_certificate_remote_dir ~ '/lab-root-ca.crt') if (tools_stack_tls_enabled | bool) else omit }}"
+    headers:
+      Host: "{{ nexus_hostname }}"
+      Accept: application/json
+    url_username: admin
+    url_password: "{{ nexus_admin_password }}"
+    force_basic_auth: true
+    status_code: 200
+    return_content: true
+  register: nexus_repositories
+  changed_when: false
+
+- name: Remove default Nexus repositories
+  ansible.builtin.uri:
+    url: "{{ tools_stack_nexus_api_base_url }}/service/rest/v1/repositories/{{ item }}"
+    method: DELETE
+    validate_certs: "{{ tools_stack_tls_enabled | bool }}"
+    use_proxy: false
+    ca_path: "{{ (tools_stack_certificate_remote_dir ~ '/lab-root-ca.crt') if (tools_stack_tls_enabled | bool) else omit }}"
+    headers:
+      Host: "{{ nexus_hostname }}"
+      Accept: application/json
+    url_username: admin
+    url_password: "{{ nexus_admin_password }}"
+    force_basic_auth: true
+    status_code:
+      - 200
+      - 202
+      - 204
+    return_content: false
+  loop:
+    # Delete groups first because they reference other repositories.
+    - maven-public
+    - nuget-group
+
+    # Maven repositories
+    - maven-central
+    - maven-releases
+    - maven-snapshots
+
+    # NuGet repositories
+    - nuget-hosted
+    - nuget.org-proxy
+
+  loop_control:
+    label: "{{ item }}"
+
+  when: item in (
+    nexus_repositories.json
+    | map(attribute='name')
+    | list
+   )
+
+
+- name: Enable Docker Bearer Token Realm without removing active realms
+  ansible.builtin.uri:
+    url: "{{ tools_stack_nexus_api_base_url }}/service/rest/v1/security/realms/active"
+    method: GET
+    validate_certs: "{{ tools_stack_tls_enabled | bool }}"
+    use_proxy: false
+    ca_path: "{{ (tools_stack_certificate_remote_dir ~ '/lab-root-ca.crt') if (tools_stack_tls_enabled | bool) else omit }}"
+    headers:
+      Host: "{{ nexus_hostname }}"
+      Accept: application/json
+    url_username: admin
+    url_password: "{{ nexus_admin_password }}"
+    force_basic_auth: true
+    status_code: 200
+    return_content: true
+  register: nexus_active_realms
+  changed_when: false
+
+- name: Add Docker Bearer Token Realm when it is not active
+  ansible.builtin.uri:
+    url: "{{ tools_stack_nexus_api_base_url }}/service/rest/v1/security/realms/active"
+    method: PUT
+    validate_certs: "{{ tools_stack_tls_enabled | bool }}"
+    use_proxy: false
+    ca_path: "{{ (tools_stack_certificate_remote_dir ~ '/lab-root-ca.crt') if (tools_stack_tls_enabled | bool) else omit }}"
+    headers:
+      Host: "{{ nexus_hostname }}"
+      Content-Type: application/json
+      Accept: application/json
+    url_username: admin
+    url_password: "{{ nexus_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    body: "{{ nexus_active_realms.json + ['DockerToken'] }}"
+    status_code:
+      - 200
+      - 202
+      - 204
+    return_content: false
+  when: "'DockerToken' not in nexus_active_realms.json"
+
+- name: Create missing Docker and APT repositories
+  ansible.builtin.uri:
+    url: "{{ tools_stack_nexus_api_base_url }}/service/rest/v1/{{ item.endpoint }}"
+    method: POST
+    validate_certs: "{{ tools_stack_tls_enabled | bool }}"
+    use_proxy: false
+    ca_path: "{{ (tools_stack_certificate_remote_dir ~ '/lab-root-ca.crt') if (tools_stack_tls_enabled | bool) else omit }}"
+    headers:
+      Host: "{{ nexus_hostname }}"
+      Content-Type: application/json
+      Accept: application/json
+    url_username: admin
+    url_password: "{{ nexus_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    body: "{{ item.body }}"
+    status_code:
+      - 200
+      - 201
+      - 204
+    return_content: true
+  loop:
+    # Docker Hub proxy. HUB is the correct Docker index mode for Docker Hub.
+    - name: dockerhub-proxy
+      endpoint: repositories/docker/proxy
+      body:
+        name: dockerhub-proxy
+        online: true
+        storage:
+          blobStoreName: docker-proxy-data
+          strictContentTypeValidation: true
+        proxy:
+          remoteUrl: https://registry-1.docker.io
+          contentMaxAge: 1440
+          metadataMaxAge: 1440
+        negativeCache:
+          enabled: true
+          timeToLive: 1440
+        httpClient:
+          blocked: false
+          autoBlock: true
+        docker:
+          v1Enabled: false
+          forceBasicAuth: false
+          pathBasedRouting: true
+        dockerProxy:
+          indexType: HUB
+
+    # Kubernetes control-plane and core add-on images.
+    - name: k8s-proxy
+      endpoint: repositories/docker/proxy
+      body:
+        name: k8s-proxy
+        online: true
+        storage:
+          blobStoreName: docker-proxy-data
+          strictContentTypeValidation: true
+        proxy:
+          remoteUrl: https://registry.k8s.io
+          contentMaxAge: 1440
+          metadataMaxAge: 1440
+        negativeCache:
+          enabled: true
+          timeToLive: 1440
+        httpClient:
+          blocked: false
+          autoBlock: true
+        docker:
+          v1Enabled: false
+          forceBasicAuth: false
+          pathBasedRouting: true
+        dockerProxy:
+          indexType: REGISTRY
+
+    # Quay.io images, including common Kubernetes networking add-ons.
+    - name: quay-proxy
+      endpoint: repositories/docker/proxy
+      body:
+        name: quay-proxy
+        online: true
+        storage:
+          blobStoreName: docker-proxy-data
+          strictContentTypeValidation: true
+        proxy:
+          remoteUrl: https://quay.io
+          contentMaxAge: 1440
+          metadataMaxAge: 1440
+        negativeCache:
+          enabled: true
+          timeToLive: 1440
+        httpClient:
+          blocked: false
+          autoBlock: true
+        docker:
+          v1Enabled: false
+          forceBasicAuth: false
+          pathBasedRouting: true
+        dockerProxy:
+          indexType: REGISTRY
+
+    # GitHub Container Registry is used by a number of current projects/add-ons.
+    - name: ghcr-proxy
+      endpoint: repositories/docker/proxy
+      body:
+        name: ghcr-proxy
+        online: true
+        storage:
+          blobStoreName: docker-proxy-data
+          strictContentTypeValidation: true
+        proxy:
+          remoteUrl: https://ghcr.io
+          contentMaxAge: 1440
+          metadataMaxAge: 1440
+        negativeCache:
+          enabled: true
+          timeToLive: 1440
+        httpClient:
+          blocked: false
+          autoBlock: true
+        docker:
+          v1Enabled: false
+          forceBasicAuth: false
+          pathBasedRouting: true
+        dockerProxy:
+          indexType: REGISTRY
+
+    # Private hosted registry for GitLab CI pushes (e.g. the vote application).
+    - name: docker-hosted
+      endpoint: repositories/docker/hosted
+      body:
+        name: docker-hosted
+        online: true
+        storage:
+          blobStoreName: docker-hosted-data
+          strictContentTypeValidation: true
+          writePolicy: ALLOW
+        component:
+          proprietaryComponents: true
+        docker:
+          v1Enabled: false
+          forceBasicAuth: false
+          pathBasedRouting: true
+
+    # Convenient pull-only endpoint. Push to docker-hosted directly.
+    - name: docker-all
+      endpoint: repositories/docker/group
+      body:
+        name: docker-all
+        online: true
+        storage:
+          blobStoreName: default
+          strictContentTypeValidation: true
+        group:
+          memberNames:
+            - docker-hosted
+            - dockerhub-proxy
+            - k8s-proxy
+            - quay-proxy
+            - ghcr-proxy
+        docker:
+          v1Enabled: false
+          forceBasicAuth: false
+          pathBasedRouting: true
+
+    # Ubuntu 24.04 (Noble), including noble-updates and noble-backports.
+    # Blank distribution + flat=false allows multiple suites from the same
+    # Ubuntu archive endpoint.
+    - name: ubuntu-archive
+      endpoint: repositories/apt/proxy
+      body:
+        name: ubuntu-archive
+        online: true
+        storage:
+          blobStoreName: apt-data
+          strictContentTypeValidation: true
+        proxy:
+          remoteUrl: http://archive.ubuntu.com/ubuntu/
+          contentMaxAge: 1440
+          metadataMaxAge: 1440
+        negativeCache:
+          enabled: true
+          timeToLive: 1440
+        httpClient:
+          blocked: false
+          autoBlock: true
+        apt:
+          distribution: ""
+          flat: false
+
+    # Ubuntu noble-security.
+    - name: ubuntu-security
+      endpoint: repositories/apt/proxy
+      body:
+        name: ubuntu-security
+        online: true
+        storage:
+          blobStoreName: apt-data
+          strictContentTypeValidation: true
+        proxy:
+          remoteUrl: http://security.ubuntu.com/ubuntu/
+          contentMaxAge: 1440
+          metadataMaxAge: 1440
+        negativeCache:
+          enabled: true
+          timeToLive: 1440
+        httpClient:
+          blocked: false
+          autoBlock: true
+        apt:
+          distribution: ""
+          flat: false
+
+    # Docker Engine / containerd packages for Ubuntu Noble.
+    - name: docker-ce-apt
+      endpoint: repositories/apt/proxy
+      body:
+        name: docker-ce-apt
+        online: true
+        storage:
+          blobStoreName: apt-data
+          strictContentTypeValidation: true
+        proxy:
+          remoteUrl: https://download.docker.com/linux/ubuntu/
+          contentMaxAge: 1440
+          metadataMaxAge: 1440
+        negativeCache:
+          enabled: true
+          timeToLive: 1440
+        httpClient:
+          blocked: false
+          autoBlock: true
+        apt:
+          distribution: noble
+          flat: false
+
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.name not in (nexus_repositories.json | map(attribute='name') | list)
+
+- name: Read final Nexus repository list
+  ansible.builtin.uri:
+    url: "{{ tools_stack_nexus_api_base_url }}/service/rest/v1/repositories"
+    method: GET
+    validate_certs: "{{ tools_stack_tls_enabled | bool }}"
+    use_proxy: false
+    ca_path: "{{ (tools_stack_certificate_remote_dir ~ '/lab-root-ca.crt') if (tools_stack_tls_enabled | bool) else omit }}"
+    headers:
+      Host: "{{ nexus_hostname }}"
+      Accept: application/json
+    url_username: admin
+    url_password: "{{ nexus_admin_password }}"
+    force_basic_auth: true
+    status_code: 200
+    return_content: true
+  register: nexus_repositories_final
+  changed_when: false
+
+- name: Verify required repositories exist
+  ansible.builtin.assert:
+    that:
+      - item in (nexus_repositories_final.json | map(attribute='name') | list)
+    fail_msg: "Nexus repository '{{ item }}' was not created. Check the Nexus API response and repository configuration."
+    quiet: true
+  loop:
+    - dockerhub-proxy
+    - k8s-proxy
+    - quay-proxy
+    - ghcr-proxy
+    - docker-hosted
+    - docker-all
+    - ubuntu-archive
+    - ubuntu-security
+    - docker-ce-apt
