@@ -1,16 +1,16 @@
 ---
 monitoring_stack_dir: /opt/monitoring-stack
 
-monitoring_prometheus_image: prom/prometheus:v3.15.1
-monitoring_grafana_image: grafana/grafana:13.2.4-ubuntu
-monitoring_alertmanager_image: prom/alertmanager:v0.34.1
-monitoring_loki_image: grafana/loki:main-47c84cb
-monitoring_alloy_image: grafana/alloy:v1.21.2
+monitoring_prometheus_image: prom/prometheus:v3.16.0
+monitoring_grafana_image: grafana/grafana:13.2.5-ubuntu
+monitoring_alertmanager_image: prom/alertmanager:v0.34.2
+monitoring_loki_image: grafana/loki:main-0ecdff7
+monitoring_alloy_image: grafana/alloy:v1.21.3
 monitoring_docker_socket_proxy_image: tecnativa/docker-socket-proxy:master
-monitoring_traefik_image: traefik:v3.7.16
+monitoring_traefik_image: traefik:v3.7.17
 monitoring_minio_image: docker.io/pgsty/minio:RELEASE.2026-08-04T00-00-00Z
 monitoring_minio_init_image: docker.io/pgsty/mc:RELEASE.2026-08-04T00-00-00Z
-monitoring_mimir_image: grafana/mimir:3.2.3
+monitoring_mimir_image: grafana/mimir:3.2.4
 monitoring_mimir_lb_image: nginx:1.31.8
 monitoring_tempo_image: grafana/tempo:3.1.1
 
@@ -41,4 +41,4 @@ monitoring_loki_hostname: loki.lab
 monitoring_minio_hostname: monitoring-minio.lab
 
 monitoring_scrape_interval: 15s
-monitoring_node_exporter_target: 192.168.56.33:9100
+monitoring_node_exporter_target: 192.168.56.31:9100

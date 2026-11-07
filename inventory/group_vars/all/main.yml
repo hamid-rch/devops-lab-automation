@@ -1,5 +1,5 @@
 # Monitoring server
-monitoring_server_ip: "192.168.56.33"
+monitoring_server_ip: "192.168.56.31"
 
 # Monitoring service hostnames
 monitoring_loki_hostname: "loki.lab"
