@@ -1,0 +1,175 @@
+---
+- name: Validate Ubuntu Noble before managing APT sources
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['distribution'] == 'Ubuntu'
+      - ansible_facts['distribution_release'] == 'noble'
+      - ansible_facts['distribution_version'] is version('24.04', '>=')
+    fail_msg: >-
+      This role currently manages the Noble deb822 source layout only.
+      Detected {{ ansible_facts['distribution'] | default('unknown') }}
+      {{ ansible_facts['distribution_version'] | default('unknown') }}
+      ({{ ansible_facts['distribution_release'] | default('unknown') }}).
+    quiet: true
+
+- name: Validate Docker APT architecture mapping
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['architecture'] in repositories_docker_apt_arch_map
+    fail_msg: >-
+      No Docker APT architecture mapping exists for
+      {{ ansible_facts['architecture'] }}. Extend repositories_docker_apt_arch_map.
+    quiet: true
+  when: repositories_docker_ce_enabled | bool
+
+- name: Check whether the Ubuntu deb822 sources file exists
+  ansible.builtin.stat:
+    path: "{{ repositories_ubuntu_sources_file }}"
+  register: repositories_ubuntu_sources_stat
+
+- name: Require the Ubuntu deb822 file when a source switch is enabled
+  ansible.builtin.assert:
+    that:
+      - repositories_ubuntu_sources_stat.stat.exists
+      - repositories_ubuntu_sources_stat.stat.isreg
+    fail_msg: >-
+      Expected the existing Ubuntu deb822 file at
+      {{ repositories_ubuntu_sources_file }}. The role will not create or
+      overwrite it blindly. Set repositories_ubuntu_sources_file to the
+      correct existing Noble deb822 file, or disable the Ubuntu mirror switches.
+    quiet: true
+  when: repositories_ubuntu_archive_enabled | bool or repositories_ubuntu_security_enabled | bool
+
+- name: Read the existing Ubuntu deb822 sources file
+  ansible.builtin.slurp:
+    src: "{{ repositories_ubuntu_sources_file }}"
+  register: repositories_ubuntu_sources_content
+  when: repositories_ubuntu_sources_stat.stat.exists
+
+- name: Verify an archive source is recognizable before enabling its proxy
+  ansible.builtin.assert:
+    that:
+      - >-
+        (
+          repositories_ubuntu_sources_content.content | b64decode
+          | regex_search(repositories_ubuntu_archive_source_regex)
+        ) is not none
+        or
+        (
+          repositories_ubuntu_sources_content.content | b64decode
+          | regex_search(repositories_ubuntu_archive_nexus_regex)
+        ) is not none
+    fail_msg: >-
+      Neither the expected archive.ubuntu.com URI nor this role's configured
+      Nexus archive URI was found in {{ repositories_ubuntu_sources_file }}.
+      Review the deb822 source file and adjust the matching regex if needed.
+    quiet: true
+  when:
+    - repositories_ubuntu_archive_enabled | bool
+    - repositories_ubuntu_sources_stat.stat.exists
+
+- name: Redirect Ubuntu archive to Nexus when enabled
+  ansible.builtin.replace:
+    path: "{{ repositories_ubuntu_sources_file }}"
+    regexp: "{{ repositories_ubuntu_archive_source_regex }}"
+    replace: '\g<1>{{ repositories_nexus_base_url }}/repository/ubuntu-archive/'
+    backup: true
+  notify: Update APT cache
+  when: repositories_ubuntu_archive_enabled | bool
+
+- name: Restore the upstream Ubuntu archive URI when disabled
+  ansible.builtin.replace:
+    path: "{{ repositories_ubuntu_sources_file }}"
+    regexp: "{{ repositories_ubuntu_archive_nexus_regex }}"
+    replace: '\g<1>http://archive.ubuntu.com/ubuntu/'
+    backup: true
+  notify: Update APT cache
+  when:
+    - not (repositories_ubuntu_archive_enabled | bool)
+    - repositories_ubuntu_sources_stat.stat.exists
+
+- name: Verify a security source is recognizable before enabling its proxy
+  ansible.builtin.assert:
+    that:
+      - >-
+        (
+          repositories_ubuntu_sources_content.content | b64decode
+          | regex_search(repositories_ubuntu_security_source_regex)
+        ) is not none
+        or
+        (
+          repositories_ubuntu_sources_content.content | b64decode
+          | regex_search(repositories_ubuntu_security_nexus_regex)
+        ) is not none
+    fail_msg: >-
+      Neither the expected security.ubuntu.com URI nor this role's configured
+      Nexus security URI was found in {{ repositories_ubuntu_sources_file }}.
+      Review the deb822 source file and adjust the matching regex if needed.
+    quiet: true
+  when:
+    - repositories_ubuntu_security_enabled | bool
+    - repositories_ubuntu_sources_stat.stat.exists
+
+- name: Redirect Ubuntu security to Nexus when enabled
+  ansible.builtin.replace:
+    path: "{{ repositories_ubuntu_sources_file }}"
+    regexp: "{{ repositories_ubuntu_security_source_regex }}"
+    replace: '\g<1>{{ repositories_nexus_base_url }}/repository/ubuntu-security/'
+    backup: true
+  notify: Update APT cache
+  when: repositories_ubuntu_security_enabled | bool
+
+- name: Restore the upstream Ubuntu security URI when disabled
+  ansible.builtin.replace:
+    path: "{{ repositories_ubuntu_sources_file }}"
+    regexp: "{{ repositories_ubuntu_security_nexus_regex }}"
+    replace: '\g<1>http://security.ubuntu.com/ubuntu/'
+    backup: true
+  notify: Update APT cache
+  when:
+    - not (repositories_ubuntu_security_enabled | bool)
+    - repositories_ubuntu_sources_stat.stat.exists
+
+- name: Check whether the Docker CE deb822 source already exists
+  ansible.builtin.stat:
+    path: "{{ repositories_docker_ce_source_file }}"
+  register: repositories_docker_ce_source_stat
+
+- name: Refresh APT indexes and install python3-debian required by deb822_repository
+  ansible.builtin.apt:
+    name: python3-debian
+    state: present
+    update_cache: true
+    cache_valid_time: 0
+  when:
+    - repositories_docker_ce_enabled | bool
+      or repositories_docker_ce_source_stat.stat.exists
+
+- name: Configure the Docker CE APT repository through Nexus
+  ansible.builtin.deb822_repository:
+    name: "{{ repositories_docker_ce_repo_name }}"
+    types:
+      - deb
+    uris:
+      - "{{ repositories_docker_ce_repo_url }}"
+    suites:
+      - "{{ ansible_facts['distribution_release'] }}"
+    components:
+      - stable
+    architectures:
+      - "{{ repositories_docker_apt_arch_map[ansible_facts['architecture']] }}"
+    signed_by: "{{ repositories_docker_ce_keyring_path }}"
+    state: present
+    enabled: true
+    mode: "0644"
+  notify: Update APT cache
+  when: repositories_docker_ce_enabled | bool
+
+- name: Remove the Docker CE APT source when disabled
+  ansible.builtin.deb822_repository:
+    name: "{{ repositories_docker_ce_repo_name }}"
+    state: absent
+  notify: Update APT cache
+  when:
+    - not (repositories_docker_ce_enabled | bool)
+    - repositories_docker_ce_source_stat.stat.exists

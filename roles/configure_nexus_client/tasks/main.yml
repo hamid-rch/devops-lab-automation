@@ -1,0 +1,21 @@
+---
+- name: Validate repository role settings
+  ansible.builtin.assert:
+    that:
+      - repositories_nexus_hostname | length > 0
+      - repositories_nexus_scheme in ['http', 'https']
+      - repositories_nexus_port | int > 0
+      - repositories_nexus_port | int < 65536
+    fail_msg: >-
+      Set a valid Nexus hostname, scheme (http or https), and TCP port.
+    quiet: true
+
+- name: Configure Nexus CA and Docker CE signing key
+  ansible.builtin.import_tasks: configure_gpg.yml
+  when: repositories_nexus_ca_enabled | bool or repositories_docker_ce_enabled | bool
+
+- name: Configure or restore Ubuntu and Docker CE APT sources
+  ansible.builtin.import_tasks: configure_apt.yml
+
+- name: Configure optional Docker daemon repository access
+  ansible.builtin.import_tasks: configure_docker.yml

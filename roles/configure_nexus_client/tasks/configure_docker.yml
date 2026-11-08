@@ -1,0 +1,418 @@
+---
+- name: Determine whether new Docker daemon settings are requested
+  ansible.builtin.set_fact:
+    repositories_docker_daemon_settings_requested: >-
+      {{
+        (repositories_docker_registry_mirrors | length > 0)
+        or (
+          repositories_dockerhub_enabled | bool
+          and repositories_dockerhub_mirror_url | length > 0
+        )
+        or (repositories_docker_insecure_registries | length > 0)
+        or (
+          repositories_nexus_scheme == 'http'
+          and (
+            repositories_dockerhub_enabled | bool
+            or repositories_docker_all_enabled | bool
+          )
+        )
+      }}
+  changed_when: false
+
+- name: Inspect the role-managed Docker state file
+  ansible.builtin.stat:
+    path: "{{ repositories_docker_daemon_managed_state_path }}"
+  register: repositories_docker_managed_state_stat_initial
+
+- name: Gather service facts for Docker trust and daemon checks
+  ansible.builtin.service_facts:
+  when:
+    - repositories_docker_daemon_settings_requested | bool
+      or repositories_docker_managed_state_stat_initial.stat.exists
+      or repositories_nexus_ca_enabled | bool
+
+- name: Include cleanup when this role previously managed Docker entries
+  ansible.builtin.set_fact:
+    repositories_docker_daemon_config_requested: >-
+      {{
+        (
+          'docker.service' in (ansible_facts.services | default({}))
+        )
+        and (
+          (repositories_docker_daemon_settings_requested | bool)
+          or repositories_docker_managed_state_stat_initial.stat.exists
+        )
+      }}
+  changed_when: false
+
+- name: Explain that Docker daemon settings are deferred until Docker is installed
+  ansible.builtin.debug:
+    msg: >-
+      Docker daemon settings were requested, but docker.service is not present.
+      This role does not install Docker; install Docker separately and rerun
+      this role to apply the daemon settings.
+  when:
+    - repositories_docker_daemon_settings_requested | bool
+    - "'docker.service' not in (ansible_facts.services | default({}))"
+
+- name: Require explicit permission for an HTTP Nexus Docker endpoint
+  ansible.builtin.assert:
+    that:
+      - repositories_docker_allow_insecure_http | bool
+    fail_msg: >-
+      The enabled Nexus Docker endpoint uses HTTP. Set
+      repositories_docker_allow_insecure_http=true only after accepting the
+      risk, or switch Nexus to HTTPS with a trusted certificate.
+    quiet: true
+  when:
+    - repositories_docker_daemon_config_requested | bool
+    - repositories_nexus_scheme == 'http'
+    - repositories_dockerhub_enabled | bool or repositories_docker_all_enabled | bool
+
+- name: Build the desired Docker Hub mirror list
+  ansible.builtin.set_fact:
+    repositories_docker_desired_registry_mirrors: >-
+      {{
+        (
+          repositories_docker_registry_mirrors
+          +
+          (
+            [repositories_dockerhub_mirror_url]
+            if (
+              repositories_dockerhub_enabled | bool
+              and repositories_dockerhub_mirror_url | length > 0
+            )
+            else []
+          )
+        ) | unique | list
+      }}
+  when: repositories_docker_daemon_config_requested | bool
+  changed_when: false
+
+- name: Validate Docker Hub registry mirror URLs
+  ansible.builtin.assert:
+    that:
+      - repositories_docker_registry_mirrors is sequence
+      - repositories_docker_registry_mirrors is not string
+      - repositories_docker_insecure_registries is sequence
+      - repositories_docker_insecure_registries is not string
+      - >-
+        (repositories_docker_desired_registry_mirrors
+         | select('match', '^https://[^/]+/?$') | list | length)
+        == (repositories_docker_desired_registry_mirrors | length)
+    fail_msg: >-
+      repositories_docker_registry_mirrors must contain HTTPS registry-root
+      URLs (for example https://mirror.example.net), without a repository
+      path. These are Docker Hub mirrors only.
+    quiet: true
+  when: repositories_docker_daemon_config_requested | bool
+
+- name: Create Docker's Nexus registry trust directory
+  ansible.builtin.file:
+    path: >-
+      /etc/docker/certs.d/{{
+        repositories_nexus_hostname
+        ~ (':' ~ repositories_nexus_port | string
+           if repositories_nexus_port | int != 443 else '')
+      }}
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when:
+    - repositories_nexus_ca_enabled | bool
+    - repositories_nexus_scheme == 'https'
+    - "'docker.service' in (ansible_facts.services | default({}))"
+
+- name: Install the Nexus CA into Docker's registry trust directory
+  ansible.builtin.copy:
+    src: "{{ repositories_nexus_ca_dest }}"
+    remote_src: true
+    dest: >-
+      /etc/docker/certs.d/{{
+        repositories_nexus_hostname
+        ~ (':' ~ repositories_nexus_port | string
+           if repositories_nexus_port | int != 443 else '')
+      }}/ca.crt
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Docker
+  when:
+    - repositories_nexus_ca_enabled | bool
+    - repositories_nexus_scheme == 'https'
+    - "'docker.service' in (ansible_facts.services | default({}))"
+
+- name: Ensure the Docker daemon configuration directory exists
+  ansible.builtin.file:
+    path: "{{ repositories_docker_daemon_config_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: repositories_docker_daemon_config_requested | bool
+
+- name: Inspect the current Docker daemon configuration
+  ansible.builtin.stat:
+    path: "{{ repositories_docker_daemon_config_path }}"
+  register: repositories_docker_daemon_config_stat
+  when: repositories_docker_daemon_config_requested | bool
+
+- name: Read the current Docker daemon configuration
+  ansible.builtin.slurp:
+    src: "{{ repositories_docker_daemon_config_path }}"
+  register: repositories_docker_daemon_config_slurp
+  when:
+    - repositories_docker_daemon_config_requested | bool
+    - repositories_docker_daemon_config_stat.stat.exists
+
+- name: Parse the existing Docker daemon JSON without replacing unknown keys
+  ansible.builtin.set_fact:
+    repositories_docker_current_daemon_config: >-
+      {{
+        (repositories_docker_daemon_config_slurp.content | b64decode | from_json)
+        if repositories_docker_daemon_config_stat.stat.exists
+        else {}
+      }}
+  when: repositories_docker_daemon_config_requested | bool
+  changed_when: false
+
+- name: Ensure Docker daemon JSON is an object
+  ansible.builtin.assert:
+    that:
+      - repositories_docker_current_daemon_config is mapping
+      - >-
+        repositories_docker_current_daemon_config.get('registry-mirrors', [])
+        is sequence
+      - >-
+        repositories_docker_current_daemon_config.get('registry-mirrors', [])
+        is not string
+      - >-
+        repositories_docker_current_daemon_config.get('insecure-registries', [])
+        is sequence
+      - >-
+        repositories_docker_current_daemon_config.get('insecure-registries', [])
+        is not string
+    fail_msg: >-
+      {{ repositories_docker_daemon_config_path }} must be valid JSON with an
+      object at the root; registry-mirrors and insecure-registries, when
+      present, must be arrays. Back up and correct the file before retrying.
+    quiet: true
+  when: repositories_docker_daemon_config_requested | bool
+
+- name: Read previous role-managed Docker list entries
+  ansible.builtin.slurp:
+    src: "{{ repositories_docker_daemon_managed_state_path }}"
+  register: repositories_docker_managed_state_slurp
+  when:
+    - repositories_docker_daemon_config_requested | bool
+    - repositories_docker_managed_state_stat_initial.stat.exists
+
+- name: Parse previous Docker role-managed state
+  ansible.builtin.set_fact:
+    repositories_docker_previous_managed_state: >-
+      {{
+        (repositories_docker_managed_state_slurp.content | b64decode | from_json)
+        if repositories_docker_managed_state_stat_initial.stat.exists
+        else {}
+      }}
+  when: repositories_docker_daemon_config_requested | bool
+  changed_when: false
+
+- name: Validate previous Docker role-managed state
+  ansible.builtin.assert:
+    that:
+      - repositories_docker_previous_managed_state is mapping
+      - >-
+        repositories_docker_previous_managed_state.get('added_registry_mirrors', [])
+        is sequence
+      - >-
+        repositories_docker_previous_managed_state.get('added_registry_mirrors', [])
+        is not string
+      - >-
+        repositories_docker_previous_managed_state.get('added_insecure_registries', [])
+        is sequence
+      - >-
+        repositories_docker_previous_managed_state.get('added_insecure_registries', [])
+        is not string
+    fail_msg: >-
+      The role state file {{ repositories_docker_daemon_managed_state_path }}
+      is invalid. Back it up and remove it only after reviewing which entries
+      are currently role-managed.
+    quiet: true
+  when: repositories_docker_daemon_config_requested | bool
+
+- name: Calculate current, previous, and desired Docker list values
+  ansible.builtin.set_fact:
+    repositories_docker_base_mirrors: >-
+      {{
+        repositories_docker_current_daemon_config.get('registry-mirrors', [])
+        | reject('in', repositories_docker_previous_managed_state.get('added_registry_mirrors', []))
+        | list
+      }}
+    repositories_docker_base_insecure_registries: >-
+      {{
+        repositories_docker_current_daemon_config.get('insecure-registries', [])
+        | reject('in', repositories_docker_previous_managed_state.get('added_insecure_registries', []))
+        | list
+      }}
+    repositories_docker_desired_insecure_registries: >-
+      {{
+        (
+          repositories_docker_insecure_registries
+          +
+          (
+            [repositories_nexus_hostname ~ (':' ~ repositories_nexus_port | string
+              if repositories_nexus_port | int != 80 else '')]
+            if (
+              repositories_nexus_scheme == 'http'
+              and repositories_docker_allow_insecure_http | bool
+              and (
+                repositories_dockerhub_enabled | bool
+                or repositories_docker_all_enabled | bool
+              )
+            )
+            else []
+          )
+        ) | unique | list
+      }}
+  when: repositories_docker_daemon_config_requested | bool
+  changed_when: false
+
+- name: Merge Docker daemon settings while preserving unrelated JSON keys
+  ansible.builtin.set_fact:
+    repositories_docker_effective_mirrors: >-
+      {{
+        repositories_docker_base_mirrors
+        + (repositories_docker_desired_registry_mirrors
+           | reject('in', repositories_docker_base_mirrors) | list)
+      }}
+    repositories_docker_effective_insecure_registries: >-
+      {{
+        repositories_docker_base_insecure_registries
+        + (repositories_docker_desired_insecure_registries
+           | reject('in', repositories_docker_base_insecure_registries) | list)
+      }}
+    repositories_docker_new_managed_mirrors: >-
+      {{
+        repositories_docker_desired_registry_mirrors
+        | reject('in', repositories_docker_base_mirrors) | list
+      }}
+    repositories_docker_new_managed_insecure_registries: >-
+      {{
+        repositories_docker_desired_insecure_registries
+        | reject('in', repositories_docker_base_insecure_registries) | list
+      }}
+  when: repositories_docker_daemon_config_requested | bool
+  changed_when: false
+
+- name: Build the effective daemon JSON
+  ansible.builtin.set_fact:
+    repositories_docker_effective_daemon_config: >-
+      {{
+        repositories_docker_current_daemon_config
+        | combine(
+            {'registry-mirrors': repositories_docker_effective_mirrors}
+            if (
+              'registry-mirrors' in repositories_docker_current_daemon_config
+              or repositories_docker_effective_mirrors | length > 0
+            )
+            else {}
+          )
+        | combine(
+            {'insecure-registries': repositories_docker_effective_insecure_registries}
+            if (
+              'insecure-registries' in repositories_docker_current_daemon_config
+              or repositories_docker_effective_insecure_registries | length > 0
+            )
+            else {}
+          )
+      }}
+  when: repositories_docker_daemon_config_requested | bool
+  changed_when: false
+
+- name: Write the merged Docker daemon configuration
+  ansible.builtin.copy:
+    content: "{{ repositories_docker_effective_daemon_config | to_nice_json }}\n"
+    dest: "{{ repositories_docker_daemon_config_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+  notify: Restart Docker
+  when:
+    - repositories_docker_daemon_config_requested | bool
+    - >-
+      repositories_docker_daemon_config_stat.stat.exists
+      or repositories_docker_effective_daemon_config | length > 0
+    # Avoid rewriting equivalent JSON merely to normalize whitespace/key order;
+    # a formatting-only change must not cause a Docker restart.
+    - repositories_docker_effective_daemon_config != repositories_docker_current_daemon_config
+
+- name: Ensure the Docker role-state directory exists
+  ansible.builtin.file:
+    path: "{{ repositories_docker_daemon_managed_state_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  when: repositories_docker_daemon_config_requested | bool
+
+- name: Save only the entries added by this role
+  ansible.builtin.copy:
+    content: >-
+      {{
+        {
+          'added_registry_mirrors': repositories_docker_new_managed_mirrors,
+          'added_insecure_registries': repositories_docker_new_managed_insecure_registries
+        } | to_nice_json
+      }}
+    dest: "{{ repositories_docker_daemon_managed_state_path }}"
+    owner: root
+    group: root
+    mode: "0600"
+  when: repositories_docker_daemon_config_requested | bool
+
+- name: Validate Nexus Docker login variables
+  ansible.builtin.assert:
+    that:
+      - nexus_hostname | default('') | length > 0
+      - nexus_admin_password | default('') | length > 0
+      - nexus_docker_login_user | default('') | length > 0
+      - nexus_docker_login_user != 'root'
+    fail_msg: "Nexus Docker login variables are missing or invalid."
+
+- name: Ensure Docker group exists
+  ansible.builtin.group:
+    name: docker
+    state: present
+  become: true
+
+- name: Add non-root Docker user to docker group
+  ansible.builtin.user:
+    name: "{{ nexus_docker_login_user }}"
+    groups: docker
+    append: true
+  become: true
+  when: nexus_docker_login_user != 'root'
+
+- name: Refresh SSH connection to apply updated group membership
+  ansible.builtin.meta: reset_connection
+
+- name: Log in to Nexus Docker registry for root and non-root users
+  community.docker.docker_login:
+    registry_url: "{{ repositories_nexus_hostname }}"
+    username: "{{ nexus_admin_username }}"
+    password: "{{ nexus_admin_password }}"
+    state: present
+    reauthorize: false
+
+  become: true
+  become_user: "{{ item }}"
+
+  loop: "{{ ['root', nexus_docker_login_user] | unique }}"
+
+  loop_control:
+    label: "{{ item }}"
+
+  no_log: true

@@ -1,0 +1,90 @@
+---
+# Nexus endpoint. Port 80/443 is omitted from generated URLs when it is the
+# default for the selected scheme.
+repositories_nexus_hostname: "nexus.lab"
+nexus_docker_login_user: "{{ ansible_user | default('vagrant') }}"
+repositories_nexus_scheme: "http"
+repositories_nexus_port: 80
+repositories_nexus_base_url: >-
+  {{ repositories_nexus_scheme }}://{{ repositories_nexus_hostname }}{{
+    (':' ~ repositories_nexus_port | string)
+    if not (
+      (repositories_nexus_scheme == 'http' and repositories_nexus_port | int == 80)
+      or
+      (repositories_nexus_scheme == 'https' and repositories_nexus_port | int == 443)
+    )
+    else ''
+  }}
+
+# Ubuntu Noble APT proxy switches. The existing ubuntu.sources file is edited
+# only at matching URIs lines; Suites, Components, Signed-By, Types and other
+# deb822 fields remain untouched.
+repositories_ubuntu_archive_enabled: false
+repositories_ubuntu_security_enabled: false
+repositories_ubuntu_sources_file: "/etc/apt/sources.list.d/ubuntu.sources"
+repositories_ubuntu_archive_source_regex: >-
+  (?m)(^URIs:\s*[^\n]*?)https?://(?:[a-z]{2}\.)?archive\.ubuntu\.com/ubuntu/?(?=\s|$)
+repositories_ubuntu_security_source_regex: >-
+  (?m)(^URIs:\s*[^\n]*?)https?://security\.ubuntu\.com/ubuntu/?(?=\s|$)
+repositories_ubuntu_archive_nexus_regex: >-
+  (?m)(^URIs:\s*[^\n]*?){{ (repositories_nexus_base_url ~ '/repository/ubuntu-archive') | regex_escape }}/?(?=\s|$)
+repositories_ubuntu_security_nexus_regex: >-
+  (?m)(^URIs:\s*[^\n]*?){{ (repositories_nexus_base_url ~ '/repository/ubuntu-security') | regex_escape }}/?(?=\s|$)
+
+# Docker CE APT proxy. Enabling this only configures the package source; it
+# does NOT install Docker Engine or start its service.
+repositories_docker_ce_enabled: false
+repositories_docker_ce_repo_name: "docker-ce-nexus"
+repositories_docker_ce_source_file: "/etc/apt/sources.list.d/{{ repositories_docker_ce_repo_name }}.sources"
+repositories_docker_ce_repo_url: "{{ repositories_nexus_base_url }}/repository/docker-ce-apt"
+repositories_docker_ce_gpg_key_url: "https://download.docker.com/linux/ubuntu/gpg"
+# Optional controller-side key file. When non-empty, it takes precedence over
+# repositories_docker_ce_gpg_key_url (useful for an offline/distributed key).
+repositories_docker_ce_gpg_key_src: ""
+repositories_docker_ce_gpg_key_checksum: ""
+repositories_docker_ce_gpg_key_fingerprint: "9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
+repositories_docker_ce_keyring_path: "/etc/apt/keyrings/docker.asc"
+
+# Nexus Docker endpoints use the path-based routes already configured in the
+# supplied tools_stack role. These booleans enable use of the respective
+# endpoint and, for HTTP, its Docker daemon trust exception. They do not create
+# a transparent Docker Hub registry-mirror.
+repositories_dockerhub_enabled: false
+repositories_docker_all_enabled: false
+# Optional pathless HTTPS endpoint for a transparent Hub mirror. Leave empty
+# for the current path-based Nexus routing and use explicit image references.
+repositories_dockerhub_mirror_url: ""
+
+# Docker Engine's registry-mirrors is a Docker Hub-only feature. Use only
+# HTTPS mirror URLs that are rooted at the registry host (no repo path prefix).
+# Nexus path-based URLs such as http://nexus.lab/dockerhub-proxy are NOT
+# inserted here; see the role README for the correct path-based pull syntax.
+repositories_docker_registry_mirrors: []
+
+# HTTP Docker registries must be explicitly opted into. When true and one of
+# the Nexus path-based endpoints is enabled over HTTP, the Nexus host is added
+# to insecure-registries. This is intentionally false by default.
+repositories_docker_allow_insecure_http: false
+repositories_docker_insecure_registries: []
+
+repositories_docker_daemon_config_path: "/etc/docker/daemon.json"
+# Persists only the list entries this role itself added, allowing a later
+# disable run to remove those entries without deleting unrelated daemon data.
+repositories_docker_daemon_managed_state_path: "/var/lib/configure-repositories/docker-daemon-managed.json"
+
+# Optional custom Nexus root CA. repositories_nexus_ca_path is a path on the
+# Ansible controller, not a path on the managed host.
+repositories_nexus_ca_enabled: false
+repositories_nexus_ca_path: ""
+repositories_nexus_ca_dest: "/usr/local/share/ca-certificates/nexus-lab.crt"
+
+# Repository path details. The mapping translates Ansible kernel architecture
+# facts to Debian package architecture names expected by Docker's APT repo.
+repositories_docker_apt_arch_map:
+  x86_64: amd64
+  aarch64: arm64
+  armv7l: armhf
+  armv6l: armhf
+  s390x: s390x
+  ppc64le: ppc64el
+  riscv64: riscv64

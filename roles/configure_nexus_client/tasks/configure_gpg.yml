@@ -1,0 +1,149 @@
+---
+- name: Validate custom Nexus CA settings
+  ansible.builtin.assert:
+    that:
+      - repositories_nexus_scheme == 'https'
+      - repositories_nexus_ca_path | length > 0
+      - repositories_nexus_ca_dest.startswith('/usr/local/share/ca-certificates/')
+      - (repositories_nexus_ca_dest | regex_search('(?i)\\.crt$')) is not none
+    fail_msg: >-
+      When repositories_nexus_ca_enabled is true, use HTTPS, set
+      repositories_nexus_ca_path to a controller-side PEM/CRT file, and set
+      repositories_nexus_ca_dest below /usr/local/share/ca-certificates/ with
+      a .crt suffix so update-ca-certificates can load it.
+    quiet: true
+  when: repositories_nexus_ca_enabled | bool
+
+- name: Ensure system CA certificates support is installed
+  ansible.builtin.apt:
+    name: ca-certificates
+    state: present
+    update_cache: false
+  when: repositories_nexus_ca_enabled | bool or repositories_docker_ce_enabled | bool
+
+- name: Create system CA certificate directory
+  ansible.builtin.file:
+    path: "{{ repositories_nexus_ca_dest | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: repositories_nexus_ca_enabled | bool
+
+- name: Install the Nexus CA into the system trust store
+  ansible.builtin.copy:
+    src: "{{ repositories_nexus_ca_path }}"
+    dest: "{{ repositories_nexus_ca_dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  register: repositories_nexus_ca_copy
+  when: repositories_nexus_ca_enabled | bool
+
+# Run immediately (not via a handler) so the new CA is trusted by subsequent
+# HTTPS repository/key fetches in this same play.
+- name: Refresh the system trust store after installing the Nexus CA
+  ansible.builtin.command: update-ca-certificates
+  changed_when: true
+  when:
+    - repositories_nexus_ca_enabled | bool
+    - repositories_nexus_ca_copy.changed
+    - not ansible_check_mode
+
+- name: Validate Docker CE signing key source
+  ansible.builtin.assert:
+    that:
+      - repositories_docker_ce_gpg_key_src | length > 0
+        or repositories_docker_ce_gpg_key_url | length > 0
+    fail_msg: >-
+      Set either repositories_docker_ce_gpg_key_url or
+      repositories_docker_ce_gpg_key_src when Docker CE is enabled.
+    quiet: true
+  when: repositories_docker_ce_enabled | bool
+
+- name: Install GnuPG for signing-key fingerprint verification
+  ansible.builtin.apt:
+    name: gnupg
+    state: present
+    update_cache: false
+  when: repositories_docker_ce_enabled | bool
+
+- name: Create the APT keyrings directory
+  ansible.builtin.file:
+    path: "{{ repositories_docker_ce_keyring_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: repositories_docker_ce_enabled | bool
+
+- name: Download the official Docker signing key over HTTPS
+  ansible.builtin.get_url:
+    url: "{{ repositories_docker_ce_gpg_key_url }}"
+    dest: "{{ repositories_docker_ce_keyring_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+    checksum: "{{ repositories_docker_ce_gpg_key_checksum if repositories_docker_ce_gpg_key_checksum | length > 0 else omit }}"
+    validate_certs: true
+  when:
+    - repositories_docker_ce_enabled | bool
+    - repositories_docker_ce_gpg_key_src | length == 0
+
+- name: Distribute a pre-verified Docker signing key from the controller
+  ansible.builtin.copy:
+    src: "{{ repositories_docker_ce_gpg_key_src }}"
+    dest: "{{ repositories_docker_ce_keyring_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - repositories_docker_ce_enabled | bool
+    - repositories_docker_ce_gpg_key_src | length > 0
+
+- name: Check whether the Docker signing key is available for validation
+  ansible.builtin.stat:
+    path: "{{ repositories_docker_ce_keyring_path }}"
+  register: repositories_docker_gpg_key_stat
+  when: repositories_docker_ce_enabled | bool
+
+- name: Read the Docker signing key fingerprint
+  ansible.builtin.command:
+    argv:
+      - gpg
+      - --show-keys
+      - --with-colons
+      - "{{ repositories_docker_ce_keyring_path }}"
+  register: repositories_docker_gpg_key_info
+  changed_when: false
+  check_mode: false
+  when:
+    - repositories_docker_ce_enabled | bool
+    - repositories_docker_gpg_key_stat.stat.exists
+
+- name: Verify the Docker signing key fingerprint
+  ansible.builtin.assert:
+    that:
+      - >-
+        (
+          repositories_docker_gpg_key_info.stdout
+          | regex_search('(?m)^fpr:::::::::' ~ repositories_docker_ce_gpg_key_fingerprint ~ ':')
+        ) is not none
+    fail_msg: >-
+      The Docker signing key fingerprint does not match
+      {{ repositories_docker_ce_gpg_key_fingerprint }}. The key was not trusted;
+      check the configured download URL or controller-side key file.
+    quiet: true
+  when:
+    - repositories_docker_ce_enabled | bool
+    - repositories_docker_gpg_key_stat.stat.exists
+
+- name: Explain that a new signing key is not downloaded in check mode
+  ansible.builtin.debug:
+    msg: >-
+      Check mode did not create {{ repositories_docker_ce_keyring_path }};
+      the Docker key fingerprint will be verified during a normal run.
+  when:
+    - repositories_docker_ce_enabled | bool
+    - ansible_check_mode
+    - not repositories_docker_gpg_key_stat.stat.exists

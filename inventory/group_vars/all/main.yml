@@ -1,3 +1,4 @@
+---
 # Monitoring server
 monitoring_server_ip: "192.168.56.31"
 
@@ -5,3 +6,23 @@ monitoring_server_ip: "192.168.56.31"
 monitoring_loki_hostname: "loki.lab"
 
 monitoring_tenant_id: "anonymous"
+nexus_hostname: "nexus.lab"
+repositories_nexus_hostname: "nexus.lab"
+repositories_nexus_scheme: "http"
+repositories_nexus_port: 80
+
+
+repositories_ubuntu_archive_enabled: true
+repositories_ubuntu_security_enabled: true
+repositories_docker_ce_enabled: true
+
+# Nexus is currently HTTP and path-based. This makes the Nexus hostname an
+# explicitly trusted insecure registry endpoint in Docker daemon settings.
+repositories_dockerhub_enabled: true
+repositories_docker_all_enabled: true
+repositories_docker_allow_insecure_http: true
+
+# No transparent registry-mirrors entry is added for the current path-based
+# Nexus route. Pull with:
+# docker pull nexus.lab/dockerhub-proxy/library/alpine:latest
+repositories_docker_registry_mirrors: []

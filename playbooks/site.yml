@@ -1,14 +1,21 @@
 ---
+- name: configure nexus repositories
+  hosts: configure_nexus_repositories
+  become: true
+
+  roles:
+    - configure_nexus_client
+
 # - name: Install Docker
-#   hosts: tools_stack
+#   hosts: configure_nexus_repositories
 #   become: true
 
 #   roles:
 #     - docker
 
-- name: install nexus and minio and traefik
-  hosts: toolsStack
-  become: true
+# - name: install nexus and minio and traefik
+#   hosts: toolsStack
+#   become: true
 
-  roles:
-    - tools_stack
+#   roles:
+#     - tools_stack

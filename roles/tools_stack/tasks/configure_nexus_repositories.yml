@@ -15,6 +15,48 @@
 #   tools_stack_tls_enabled (false = HTTP lab mode, true = HTTPS with the lab CA)
 #   tools_stack_certificate_remote_dir (required only when TLS is enabled)
 
+# Docker Registry Pull Examples
+#
+# All Docker repositories use Path-Based Routing through Traefik.
+# Docker image references must NOT include the /repository/ prefix.
+#
+# 1. Docker Hub Proxy
+#    Pull an official Alpine image from Docker Hub.
+#    docker pull nexus.lab/dockerhub-proxy/library/alpine:latest
+#
+# 2. Docker Group
+#    Pull an image through the unified Docker group.
+#    Includes docker-hosted and all configured proxy repositories.
+#    docker pull nexus.lab/docker-all/library/alpine:latest
+#
+# 3. Kubernetes Registry Proxy
+#    Pull CoreDNS from registry.k8s.io.
+#    docker pull --platform linux/amd64 nexus.lab/k8s-proxy/coredns/coredns:v1.14.7
+#
+# 4. Quay.io Proxy
+#    Pull Prometheus Node Exporter from quay.io.
+#    docker pull --platform linux/amd64 nexus.lab/quay-proxy/prometheus/node-exporter:v1.9.1
+#
+# 5. GitHub Container Registry Proxy
+#    Pull the Docker Samples voting application image from GHCR.
+#    docker pull nexus.lab/ghcr-proxy/dockersamples/example-voting-app-vote:pr-311
+#
+# 6. Docker Hosted
+#    Pull an image previously pushed to the private hosted repository.
+#    docker pull nexus.lab/docker-hosted/alpine-test:latest
+#
+# Docker Hosted Push Example
+#    docker tag alpine:latest nexus.lab/docker-hosted/alpine-test:latest
+#    docker push nexus.lab/docker-hosted/alpine-test:latest
+#
+# Authentication:
+#    docker login nexus.lab
+#
+# Note:
+#    Use docker-all as the default pull endpoint when accessing
+#    images from multiple configured repositories.
+#    Push images directly to docker-hosted.
+
 - name: Validate Nexus repository provisioning settings
   ansible.builtin.assert:
     that:
@@ -229,7 +271,7 @@
         docker:
           v1Enabled: false
           forceBasicAuth: false
-          pathBasedRouting: true
+          pathEnabled: true
         dockerProxy:
           indexType: HUB
 
@@ -255,7 +297,7 @@
         docker:
           v1Enabled: false
           forceBasicAuth: false
-          pathBasedRouting: true
+          pathEnabled: true
         dockerProxy:
           indexType: REGISTRY
 
@@ -281,7 +323,7 @@
         docker:
           v1Enabled: false
           forceBasicAuth: false
-          pathBasedRouting: true
+          pathEnabled: true
         dockerProxy:
           indexType: REGISTRY
 
@@ -307,7 +349,7 @@
         docker:
           v1Enabled: false
           forceBasicAuth: false
-          pathBasedRouting: true
+          pathEnabled: true
         dockerProxy:
           indexType: REGISTRY
 
@@ -326,7 +368,7 @@
         docker:
           v1Enabled: false
           forceBasicAuth: false
-          pathBasedRouting: true
+          pathEnabled: true
 
     # Convenient pull-only endpoint. Push to docker-hosted directly.
     - name: docker-all
@@ -347,7 +389,7 @@
         docker:
           v1Enabled: false
           forceBasicAuth: false
-          pathBasedRouting: true
+          pathEnabled: true
 
     # Ubuntu 24.04 (Noble), including noble-updates and noble-backports.
     # Blank distribution + flat=false allows multiple suites from the same
@@ -423,6 +465,122 @@
   loop_control:
     label: "{{ item.name }}"
   when: item.name not in (nexus_repositories.json | map(attribute='name') | list)
+
+
+- name: Read existing Docker repository configurations
+  ansible.builtin.uri:
+    url: "{{ tools_stack_nexus_api_base_url }}/service/rest/v1/{{ item.endpoint }}/{{ item.name }}"
+    method: GET
+    validate_certs: "{{ tools_stack_tls_enabled | bool }}"
+    use_proxy: false
+    ca_path: "{{ (tools_stack_certificate_remote_dir ~ '/lab-root-ca.crt') if (tools_stack_tls_enabled | bool) else omit }}"
+    headers:
+      Host: "{{ nexus_hostname }}"
+      Accept: application/json
+    url_username: admin
+    url_password: "{{ nexus_admin_password }}"
+    force_basic_auth: true
+    status_code: 200
+    return_content: true
+  loop:
+    - name: dockerhub-proxy
+      endpoint: repositories/docker/proxy
+    - name: k8s-proxy
+      endpoint: repositories/docker/proxy
+    - name: quay-proxy
+      endpoint: repositories/docker/proxy
+    - name: ghcr-proxy
+      endpoint: repositories/docker/proxy
+    - name: docker-hosted
+      endpoint: repositories/docker/hosted
+    - name: docker-all
+      endpoint: repositories/docker/group
+  loop_control:
+    label: "{{ item.name }}"
+  register: nexus_docker_repository_configs
+  changed_when: false
+
+- name: Enable path-based routing on existing Docker repositories
+  ansible.builtin.uri:
+    url: "{{ tools_stack_nexus_api_base_url }}/service/rest/v1/{{ item.item.endpoint }}/{{ item.item.name }}"
+    method: PUT
+    validate_certs: "{{ tools_stack_tls_enabled | bool }}"
+    use_proxy: false
+    ca_path: "{{ (tools_stack_certificate_remote_dir ~ '/lab-root-ca.crt') if (tools_stack_tls_enabled | bool) else omit }}"
+    headers:
+      Host: "{{ nexus_hostname }}"
+      Content-Type: application/json
+      Accept: application/json
+    url_username: admin
+    url_password: "{{ nexus_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    body: >-
+      {{
+        item.json
+        | combine(
+            {
+              'docker': (
+                item.json.docker
+                | combine({'pathEnabled': true})
+              )
+            },
+            recursive=True
+          )
+      }}
+    status_code:
+      - 200
+      - 204
+    return_content: false
+  loop: "{{ nexus_docker_repository_configs.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: not (item.json.docker.pathEnabled | default(false, true))
+
+- name: Verify path-based routing on Docker repositories
+  ansible.builtin.uri:
+    url: "{{ tools_stack_nexus_api_base_url }}/service/rest/v1/{{ item.endpoint }}/{{ item.name }}"
+    method: GET
+    validate_certs: "{{ tools_stack_tls_enabled | bool }}"
+    use_proxy: false
+    ca_path: "{{ (tools_stack_certificate_remote_dir ~ '/lab-root-ca.crt') if (tools_stack_tls_enabled | bool) else omit }}"
+    headers:
+      Host: "{{ nexus_hostname }}"
+      Accept: application/json
+    url_username: admin
+    url_password: "{{ nexus_admin_password }}"
+    force_basic_auth: true
+    status_code: 200
+    return_content: true
+  loop:
+    - name: dockerhub-proxy
+      endpoint: repositories/docker/proxy
+    - name: k8s-proxy
+      endpoint: repositories/docker/proxy
+    - name: quay-proxy
+      endpoint: repositories/docker/proxy
+    - name: ghcr-proxy
+      endpoint: repositories/docker/proxy
+    - name: docker-hosted
+      endpoint: repositories/docker/hosted
+    - name: docker-all
+      endpoint: repositories/docker/group
+  loop_control:
+    label: "{{ item.name }}"
+  register: nexus_docker_repository_verification
+  changed_when: false
+
+- name: Assert path-based routing is enabled
+  ansible.builtin.assert:
+    that:
+      - item.json.docker.pathEnabled | bool
+    fail_msg: >-
+      Path-based routing is not enabled for Docker repository
+      '{{ item.item.name }}'.
+    quiet: true
+  loop: "{{ nexus_docker_repository_verification.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
 
 - name: Read final Nexus repository list
   ansible.builtin.uri:
