@@ -1,0 +1,10 @@
+---
+- name: Verify four-node distributed MinIO lab
+  hosts: minio_nodes
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Run MinIO stack verification tasks with role defaults
+      ansible.builtin.include_role:
+        name: minio_stack
+        tasks_from: verify.yml

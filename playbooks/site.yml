@@ -1,10 +1,10 @@
 ---
-- name: configure nexus repositories
-  hosts: configure_nexus_repositories
-  become: true
+# - name: configure nexus repositories
+#   hosts: configure_nexus_repositories
+#   become: true
 
-  roles:
-    - configure_nexus_client
+#   roles:
+#     - configure_nexus_client
 
 # - name: Install Docker
 #   hosts: configure_nexus_repositories
@@ -19,3 +19,14 @@
 
 #   roles:
 #     - tools_stack
+
+- name: Configure MinIO bucket versioning
+  hosts: minio_stack
+  become: true
+  roles:
+    - minio_stack
+  tasks:
+    - name: Ensure versioning is enabled on the lab bucket
+      ansible.builtin.include_role:
+        name: minio_stack
+        tasks_from: versioning

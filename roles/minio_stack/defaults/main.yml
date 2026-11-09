@@ -1,0 +1,53 @@
+---
+# Keep image references configurable here. Existing image values are preserved.
+minio_image: "nexus.lab/dockerhub-proxy/pgsty/minio:RELEASE.2026-08-04T00-00-00Z"
+minio_mc_image: "nexus.lab/dockerhub-proxy/pgsty/mc:latest"
+minio_traefik_image: "nexus.lab/docker-all/library/traefik:v3.7.17"
+
+# Inventory / cluster topology
+minio_node_group: minio_stack
+minio_expected_nodes: 4
+minio_primary_node: "{{ groups[minio_node_group][0] }}"
+
+# Dedicated Vagrant secondary disk. It must be blank before first provisioning.
+# The role creates two 500 MiB XFS partitions on this disk.
+minio_data_disk: /dev/sdb
+minio_partition_size_mib: 500
+minio_partition_start_mib: 1
+minio_drive_fstype: xfs
+minio_data_uid: 1000
+minio_data_gid: 1000
+minio_data_drives:
+  - name: data1
+    device_path: /dev/sdb1
+    mount_path: /srv/minio/data1
+    container_path: /data1
+  - name: data2
+    device_path: /dev/sdb2
+    mount_path: /srv/minio/data2
+    container_path: /data2
+
+# MinIO service settings
+minio_stack_dir: /opt/minio-stack
+minio_api_port: 9000
+minio_console_port: 9001
+minio_container_api_port: 9000
+minio_container_console_port: 9001
+minio_api_bind_ip: "0.0.0.0"
+minio_lab_bucket: lab-versioning
+minio_api_hostname: "s3.lab"
+minio_console_hostname: "minio.lab"
+minio_browser_redirect_url: "http://minio.lab"
+minio_server_console_address: ":9001"
+
+# Traefik is deployed only on the first inventory node as the lab ingress.
+# For production, use an external HA load balancer / VIP instead.
+minio_traefik_port: 80
+minio_traefik_container_port: 80
+minio_traefik_entrypoint: web
+minio_traefik_entrypoint_address: ":80"
+minio_traefik_log_level: INFO
+
+# Safety: refuse to silently reuse legacy single-drive data.
+minio_legacy_data_dir: /srv/minio/data
+minio_allow_legacy_data_dir: false

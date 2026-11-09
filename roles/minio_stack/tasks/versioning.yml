@@ -1,0 +1,101 @@
+
+---
+- name: Configure lab bucket and enable versioning
+  delegate_to: "{{ groups[minio_node_group][0] }}"
+  run_once: true
+  become: true
+  block:
+
+    - name: Create mc configuration directory
+      ansible.builtin.file:
+        path: "{{ minio_stack_dir }}/mc-config"
+        state: directory
+        mode: "0777"
+
+    - name: Configure MinIO alias using mc
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --network
+          - host
+          - -e
+          - MC_CONFIG_DIR=/mc-config
+          - -v
+          - "{{ minio_stack_dir }}/mc-config:/mc-config"
+          - "{{ minio_mc_image }}"
+          - alias
+          - set
+          - lab
+          - "http://{{ hostvars[groups[minio_node_group][0]].ansible_host | default(groups[minio_node_group][0]) }}:{{ minio_api_port }}"
+          - "{{ minio_root_user }}"
+          - "{{ minio_root_password }}"
+      register: minio_alias_result
+      changed_when: false
+
+    - name: Create lab bucket if it does not exist
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --network
+          - host
+          - -e
+          - MC_CONFIG_DIR=/mc-config
+          - -v
+          - "{{ minio_stack_dir }}/mc-config:/mc-config"
+          - "{{ minio_mc_image }}"
+          - mb
+          - --ignore-existing
+          - "lab/{{ minio_lab_bucket }}"
+      register: minio_bucket_create
+      changed_when: "'created' in (minio_bucket_create.stdout | default('') | lower)"
+
+    - name: Enable versioning on lab bucket
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --network
+          - host
+          - -e
+          - MC_CONFIG_DIR=/mc-config
+          - -v
+          - "{{ minio_stack_dir }}/mc-config:/mc-config"
+          - "{{ minio_mc_image }}"
+          - version
+          - enable
+          - "lab/{{ minio_lab_bucket }}"
+      register: minio_versioning_result
+      changed_when: "'enabled' in (minio_versioning_result.stdout | default('') | lower)"
+
+    - name: Verify bucket versioning status
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --network
+          - host
+          - -e
+          - MC_CONFIG_DIR=/mc-config
+          - -v
+          - "{{ minio_stack_dir }}/mc-config:/mc-config"
+          - "{{ minio_mc_image }}"
+          - version
+          - info
+          - "lab/{{ minio_lab_bucket }}"
+      register: minio_versioning_status
+      changed_when: false
+
+    - name: Assert lab bucket versioning is enabled
+      ansible.builtin.assert:
+        that:
+          - "'enabled' in minio_versioning_status.stdout | lower"
+        fail_msg: |
+          MinIO bucket versioning is not enabled.
+          Output: {{ minio_versioning_status.stdout | default('No output') }}
+          Error: {{ minio_versioning_status.stderr | default('No error output') }}

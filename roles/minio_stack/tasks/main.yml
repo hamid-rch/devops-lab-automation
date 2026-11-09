@@ -1,0 +1,249 @@
+---
+- name: Validate MinIO distributed cluster inventory
+  ansible.builtin.assert:
+    that:
+      - groups[minio_node_group] is defined
+      - groups[minio_node_group] | length == minio_expected_nodes
+      - minio_data_drives | length == 2
+      - (minio_data_drives | map(attribute='mount_path') | unique | list | length) == 2
+      - (minio_data_drives | map(attribute='container_path') | unique | list | length) == 2
+    fail_msg: >-
+      This lab role requires exactly {{ minio_expected_nodes }} hosts in
+      {{ minio_node_group }} and exactly two unique data drives per node.
+
+- name: Check legacy single-drive directory
+  ansible.builtin.stat:
+    path: "{{ minio_legacy_data_dir }}"
+  register: minio_legacy_dir_stat
+
+- name: Inspect legacy single-drive directory
+  ansible.builtin.command:
+    argv:
+      - find
+      - "{{ minio_legacy_data_dir }}"
+      - -mindepth
+      - "1"
+      - -maxdepth
+      - "1"
+      - -print
+      - -quit
+  register: minio_legacy_dir_contents
+  changed_when: false
+  failed_when: false
+  when:
+    - minio_legacy_dir_stat.stat.exists
+    - minio_legacy_dir_stat.stat.isdir
+
+- name: Refuse implicit migration from legacy single-drive data
+  ansible.builtin.assert:
+    that:
+      - minio_allow_legacy_data_dir | bool or not (minio_legacy_dir_stat.stat.exists and minio_legacy_dir_stat.stat.isdir and minio_legacy_dir_contents.stdout | default('') != '')
+    fail_msg: >-
+      {{ minio_legacy_data_dir }} contains existing data. This role now uses
+      two new 500 MiB lab drives. Back up/migrate the old data or explicitly
+      set minio_allow_legacy_data_dir=true after reviewing the consequences.
+
+- name: Install partitioning and XFS utilities
+  ansible.builtin.apt:
+    name:
+      - parted
+      - xfsprogs
+    state: present
+    update_cache: true
+
+- name: Inspect dedicated MinIO data disk
+  ansible.builtin.stat:
+    path: "{{ minio_data_disk }}"
+  register: minio_data_disk_stat
+
+- name: Validate dedicated MinIO data disk is a block device
+  ansible.builtin.assert:
+    that:
+      - minio_data_disk_stat.stat.exists
+      - minio_data_disk_stat.stat.isblk
+    fail_msg: "{{ minio_data_disk }} does not exist or is not a block device. Check minio_data_disk in defaults/group_vars."
+
+- name: List current MinIO data disk and partitions
+  ansible.builtin.command:
+    argv:
+      - lsblk
+      - -nrpo
+      - NAME
+      - "{{ minio_data_disk }}"
+  register: minio_data_disk_layout
+  changed_when: false
+
+- name: Ensure data disk is blank or already has exactly the two expected partitions
+  ansible.builtin.assert:
+    that:
+      - >-
+        minio_data_disk_layout.stdout_lines == [minio_data_disk]
+        or minio_data_disk_layout.stdout_lines == [minio_data_disk] + (minio_data_drives | map(attribute='device_path') | list)
+    fail_msg: >-
+      {{ minio_data_disk }} has an unexpected partition layout:
+      {{ minio_data_disk_layout.stdout_lines }}. Expected a blank disk or exactly
+      {{ minio_data_drives | map(attribute='device_path') | list }}. No partition changes were made.
+
+- name: Check for existing signatures on an unpartitioned data disk
+  ansible.builtin.command:
+    argv:
+      - wipefs
+      - --no-act
+      - --noheadings
+      - --output
+      - TYPE
+      - "{{ minio_data_disk }}"
+  register: minio_data_disk_signatures
+  changed_when: false
+  when: minio_data_disk_layout.stdout_lines == [minio_data_disk]
+
+- name: Refuse to repartition a disk with existing signatures
+  ansible.builtin.assert:
+    that:
+      - minio_data_disk_signatures.stdout | trim == ''
+    fail_msg: >-
+      {{ minio_data_disk }} has existing disk signatures. The role will not
+      overwrite them. Inspect and back up the disk before proceeding.
+  when: minio_data_disk_layout.stdout_lines == [minio_data_disk]
+
+- name: Create GPT partition table on the blank MinIO data disk
+  ansible.builtin.command:
+    argv:
+      - parted
+      - --script
+      - "{{ minio_data_disk }}"
+      - mklabel
+      - gpt
+  when: minio_data_disk_layout.stdout_lines == [minio_data_disk]
+
+- name: Create first 500 MiB MinIO data partition
+  ansible.builtin.command:
+    argv:
+      - parted
+      - --script
+      - "{{ minio_data_disk }}"
+      - mkpart
+      - primary
+      - xfs
+      - "{{ minio_partition_start_mib }}MiB"
+      - "{{ minio_partition_start_mib + minio_partition_size_mib }}MiB"
+  when: minio_data_disk_layout.stdout_lines == [minio_data_disk]
+
+- name: Create second 500 MiB MinIO data partition
+  ansible.builtin.command:
+    argv:
+      - parted
+      - --script
+      - "{{ minio_data_disk }}"
+      - mkpart
+      - primary
+      - xfs
+      - "{{ minio_partition_start_mib + minio_partition_size_mib + 1 }}MiB"
+      - "{{ minio_partition_start_mib + (2 * minio_partition_size_mib) + 1 }}MiB"
+  when: minio_data_disk_layout.stdout_lines == [minio_data_disk]
+
+- name: Inform kernel about new partition table
+  ansible.builtin.command:
+    argv:
+      - partprobe
+      - "{{ minio_data_disk }}"
+  when: minio_data_disk_layout.stdout_lines == [minio_data_disk]
+  changed_when: false
+
+- name: Wait for both MinIO partition device nodes
+  ansible.builtin.wait_for:
+    path: "{{ item.device_path }}"
+    state: present
+    timeout: 30
+  loop: "{{ minio_data_drives }}"
+  loop_control:
+    label: "{{ item.device_path }}"
+
+- name: Ensure MinIO stack directory exists
+  ansible.builtin.file:
+    path: "{{ minio_stack_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Prepare both MinIO data partitions
+  ansible.builtin.include_tasks: prepare_drive.yml
+  loop: "{{ minio_data_drives }}"
+  loop_control:
+    loop_var: minio_drive
+    label: "{{ minio_drive.name }}"
+
+- name: Render Traefik static configuration
+  ansible.builtin.template:
+    src: traefik.yml.j2
+    dest: "{{ minio_stack_dir }}/traefik.yml"
+    mode: "0644"
+  when: inventory_hostname == minio_primary_node
+
+- name: Render Traefik dynamic configuration
+  ansible.builtin.template:
+    src: dynamic.yml.j2
+    dest: "{{ minio_stack_dir }}/dynamic.yml"
+    mode: "0644"
+  when: inventory_hostname == minio_primary_node
+
+- name: Render MinIO Compose file
+  ansible.builtin.template:
+    src: compose.yml.j2
+    dest: "{{ minio_stack_dir }}/compose.yml"
+    mode: "0640"
+
+- name: Start MinIO distributed cluster and primary-node ingress
+  community.docker.docker_compose_v2:
+    project_src: "{{ minio_stack_dir }}"
+    files:
+      - compose.yml
+    state: present
+    remove_orphans: true
+  register: minio_compose_result
+
+- name: Wait for MinIO API on each node
+  ansible.builtin.uri:
+    url: "http://{{ ansible_host | default(inventory_hostname) }}:{{ minio_api_port }}/minio/health/live"
+    method: GET
+    status_code: [200]
+  register: minio_health
+  retries: 30
+  delay: 10
+  until: minio_health.status == 200
+
+- name: Wait for MinIO cluster readiness
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups[minio_node_group][0]].ansible_host | default(groups[minio_node_group][0]) }}:{{ minio_api_port }}/minio/health/cluster"
+    method: GET
+    status_code: [200]
+  register: minio_cluster_health
+  retries: 30
+  delay: 10
+  until: minio_cluster_health.status == 200
+  run_once: true
+
+- name: Wait for MinIO cluster read quorum
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups[minio_node_group][0]].ansible_host | default(groups[minio_node_group][0]) }}:{{ minio_api_port }}/minio/health/cluster/read"
+    method: GET
+    status_code: [200]
+  register: minio_cluster_read_health
+  retries: 30
+  delay: 10
+  until: minio_cluster_read_health.status == 200
+  run_once: true
+
+- name: Wait for MinIO cluster write quorum
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups[minio_node_group][0]].ansible_host | default(groups[minio_node_group][0]) }}:{{ minio_api_port }}/minio/health/cluster"
+    method: GET
+    status_code: [200]
+  register: minio_cluster_write_health
+  retries: 30
+  delay: 10
+  until: minio_cluster_write_health.status == 200
+  run_once: true
+
+- name: Configure bucket and enable versioning
+  ansible.builtin.include_tasks: versioning.yml
+  run_once: true

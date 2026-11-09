@@ -1,0 +1,185 @@
+---
+- name: Validate rendered Docker Compose configuration
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - -f
+      - "{{ minio_stack_dir }}/compose.yml"
+      - config
+      - --quiet
+  changed_when: false
+
+- name: Check MinIO container is running
+  ansible.builtin.command:
+    argv:
+      - docker
+      - inspect
+      - --format
+      - "{{ '{{' }}.State.Status{{ '}}' }}"
+      - minio
+  register: minio_container_status
+  changed_when: false
+  failed_when: minio_container_status.stdout != 'running'
+
+- name: Verify both lab XFS drives are mounted
+  ansible.builtin.command:
+    argv:
+      - findmnt
+      - -n
+      - -o
+      - FSTYPE
+      - "{{ item.mount_path }}"
+  loop: "{{ minio_data_drives }}"
+  register: minio_test_mounts
+  changed_when: false
+  loop_control:
+    label: "{{ item.mount_path }}"
+
+- name: Assert both XFS mounts are healthy
+  ansible.builtin.assert:
+    that:
+      - minio_test_mounts.results | length == minio_data_drives | length
+      - minio_test_mounts.results | map(attribute="stdout") | list | unique | list == [minio_drive_fstype]
+    fail_msg: "One or more MinIO data mounts are not using {{ minio_drive_fstype }}."
+
+- name: Check local MinIO liveness
+  ansible.builtin.uri:
+    url: "http://{{ ansible_host | default(inventory_hostname) }}:{{ minio_api_port }}/minio/health/live"
+    method: GET
+    status_code: [200]
+
+- name: Check cluster health
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups[minio_node_group][0]].ansible_host | default(groups[minio_node_group][0]) }}:{{ minio_api_port }}/minio/health/cluster"
+    method: GET
+    status_code: [200]
+  run_once: true
+  delegate_to: "{{ groups[minio_node_group][0] }}"
+
+- name: Check cluster read quorum
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups[minio_node_group][0]].ansible_host | default(groups[minio_node_group][0]) }}:{{ minio_api_port }}/minio/health/cluster/read"
+    method: GET
+    status_code: [200]
+  run_once: true
+  delegate_to: "{{ groups[minio_node_group][0] }}"
+
+- name: Check cluster write quorum
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups[minio_node_group][0]].ansible_host | default(groups[minio_node_group][0]) }}:{{ minio_api_port }}/minio/health/cluster/write"
+    method: GET
+    status_code: [200]
+  run_once: true
+  delegate_to: "{{ groups[minio_node_group][0] }}"
+
+- name: Check primary Traefik container is running
+  ansible.builtin.command:
+    argv:
+      - docker
+      - inspect
+      - --format
+      - "{{ '{{' }}.State.Status{{ '}}' }}"
+      - minio-traefik
+  delegate_to: "{{ groups[minio_node_group][0] }}"
+  run_once: true
+  register: minio_traefik_status
+  changed_when: false
+  failed_when: minio_traefik_status.stdout != 'running'
+
+- name: Check Traefik S3 API route
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups[minio_node_group][0]].ansible_host | default(groups[minio_node_group][0]) }}:{{ minio_traefik_port }}/minio/health/ready"
+    headers:
+      Host: "{{ minio_api_hostname }}"
+    method: GET
+    status_code: [200]
+  run_once: true
+  delegate_to: "{{ groups[minio_node_group][0] }}"
+
+- name: Check Traefik Console route
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups[minio_node_group][0]].ansible_host | default(groups[minio_node_group][0]) }}:{{ minio_traefik_port }}/"
+    headers:
+      Host: "{{ minio_console_hostname }}"
+    method: GET
+    status_code: [200, 301, 302]
+  run_once: true
+  delegate_to: "{{ groups[minio_node_group][0] }}"
+
+- name: Check lab bucket versioning status
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - host
+      - -e
+      - "MC_HOST_lab=http://{{ minio_root_user }}:{{ minio_root_password | urlencode }}@{{ hostvars[groups[minio_node_group][0]].ansible_host | default(groups[minio_node_group][0]) }}:{{ minio_api_port }}"
+      - "{{ minio_mc_image }}"
+      - version
+      - info
+      - "lab/{{ minio_lab_bucket }}"
+  delegate_to: "{{ groups[minio_node_group][0] }}"
+  run_once: true
+  register: minio_test_versioning
+  changed_when: false
+  failed_when: "'enabled' not in minio_test_versioning.stdout | lower"
+  no_log: true
+
+- name: Upload a smoke-test object through the MinIO S3 API
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - host
+      - -e
+      - "MC_HOST_lab=http://{{ minio_root_user }}:{{ minio_root_password | urlencode }}@{{ hostvars[groups[minio_node_group][0]].ansible_host | default(groups[minio_node_group][0]) }}:{{ minio_api_port }}"
+      - "{{ minio_mc_image }}"
+      - cp
+      - /etc/hostname
+      - "lab/{{ minio_lab_bucket }}/.ansible-minio-smoke-test"
+  delegate_to: "{{ groups[minio_node_group][0] }}"
+  run_once: true
+  no_log: true
+
+- name: Verify the uploaded smoke-test object
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - host
+      - -e
+      - "MC_HOST_lab=http://{{ minio_root_user }}:{{ minio_root_password | urlencode }}@{{ hostvars[groups[minio_node_group][0]].ansible_host | default(groups[minio_node_group][0]) }}:{{ minio_api_port }}"
+      - "{{ minio_mc_image }}"
+      - stat
+      - "lab/{{ minio_lab_bucket }}/.ansible-minio-smoke-test"
+  delegate_to: "{{ groups[minio_node_group][0] }}"
+  run_once: true
+  changed_when: false
+  no_log: true
+
+- name: Remove the smoke-test object
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - host
+      - -e
+      - "MC_HOST_lab=http://{{ minio_root_user }}:{{ minio_root_password | urlencode }}@{{ hostvars[groups[minio_node_group][0]].ansible_host | default(groups[minio_node_group][0]) }}:{{ minio_api_port }}"
+      - "{{ minio_mc_image }}"
+      - rm
+      - --versions
+      - --force
+      - "lab/{{ minio_lab_bucket }}/.ansible-minio-smoke-test"
+  delegate_to: "{{ groups[minio_node_group][0] }}"
+  run_once: true
+  changed_when: false
+  no_log: true

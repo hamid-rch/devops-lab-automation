@@ -1,0 +1,17 @@
+entryPoints:
+  {{ minio_traefik_entrypoint }}:
+    address: "{{ minio_traefik_entrypoint_address }}"
+
+providers:
+  file:
+    filename: /etc/traefik/dynamic.yml
+    watch: true
+
+api:
+  dashboard: false
+  insecure: false
+
+log:
+  level: "{{ minio_traefik_log_level }}"
+
+accessLog: {}

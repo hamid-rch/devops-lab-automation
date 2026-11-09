@@ -1,0 +1,96 @@
+---
+- name: Inspect MinIO partition filesystem
+  ansible.builtin.command:
+    argv:
+      - blkid
+      - -o
+      - value
+      - -s
+      - TYPE
+      - "{{ minio_drive.device_path }}"
+  register: minio_drive_fs
+  changed_when: false
+  failed_when: false
+
+- name: Refuse to overwrite an unexpected filesystem
+  ansible.builtin.assert:
+    that:
+      - minio_drive_fs.stdout == '' or minio_drive_fs.stdout == minio_drive_fstype
+    fail_msg: >-
+      {{ minio_drive.device_path }} contains {{ minio_drive_fs.stdout }}.
+      Expected {{ minio_drive_fstype }}. No formatting was performed.
+
+- name: Format new MinIO partition as XFS
+  ansible.builtin.command:
+    argv:
+      - mkfs.xfs
+      - -f
+      - "{{ minio_drive.device_path }}"
+  when: minio_drive_fs.stdout == ''
+
+- name: Read MinIO partition UUID
+  ansible.builtin.command:
+    argv:
+      - blkid
+      - -o
+      - value
+      - -s
+      - UUID
+      - "{{ minio_drive.device_path }}"
+  register: minio_drive_uuid
+  changed_when: false
+
+- name: Ensure MinIO mountpoint exists
+  ansible.builtin.file:
+    path: "{{ minio_drive.mount_path }}"
+    state: directory
+    mode: "0750"
+
+- name: Check whether MinIO mountpoint is already mounted
+  ansible.builtin.command:
+    argv:
+      - mountpoint
+      - -q
+      - "{{ minio_drive.mount_path }}"
+  register: minio_mountpoint
+  changed_when: false
+  failed_when: false
+
+- name: Inspect unmounted MinIO mountpoint for existing files
+  ansible.builtin.command:
+    argv:
+      - find
+      - "{{ minio_drive.mount_path }}"
+      - -mindepth
+      - "1"
+      - -maxdepth
+      - "1"
+      - -print
+      - -quit
+  register: minio_mountpoint_contents
+  changed_when: false
+  when: minio_mountpoint.rc != 0
+
+- name: Refuse to hide existing data under a new mount
+  ansible.builtin.assert:
+    that:
+      - minio_mountpoint.rc == 0 or minio_mountpoint_contents.stdout == ''
+    fail_msg: >-
+      {{ minio_drive.mount_path }} is not mounted and is not empty.
+      Move or back up its contents before mounting the lab partition.
+
+- name: Mount MinIO XFS partition persistently by UUID
+  ansible.builtin.mount:
+    path: "{{ minio_drive.mount_path }}"
+    src: "/dev/disk/by-uuid/{{ minio_drive_uuid.stdout }}"
+    fstype: "{{ minio_drive_fstype }}"
+    opts: "noatime"
+    state: mounted
+
+- name: Set MinIO data directory ownership for the container user
+  ansible.builtin.file:
+    path: "{{ minio_drive.mount_path }}"
+    state: directory
+    owner: "{{ minio_data_uid }}"
+    group: "{{ minio_data_gid }}"
+    mode: "0750"

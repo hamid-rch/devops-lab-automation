@@ -1,0 +1,7 @@
+---
+galaxy_info:
+  role_name: minio_stack
+  description: Four-node distributed MinIO lab with two XFS partitions on a dedicated secondary disk per node and a single Traefik ingress
+  license: MIT
+  min_ansible_version: "2.15"
+dependencies: []

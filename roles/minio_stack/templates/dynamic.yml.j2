@@ -1,0 +1,34 @@
+http:
+  routers:
+    minio-api:
+      rule: "Host(`{{ minio_api_hostname }}`)"
+      entryPoints:
+        - {{ minio_traefik_entrypoint }}
+      service: minio-api
+
+    minio-console:
+      rule: "Host(`{{ minio_console_hostname }}`)"
+      entryPoints:
+        - {{ minio_traefik_entrypoint }}
+      service: minio-console
+
+  services:
+    minio-api:
+      loadBalancer:
+        passHostHeader: true
+        healthCheck:
+          path: /minio/health/ready
+          interval: 10s
+          timeout: 3s
+        servers:
+{% for node in groups[minio_node_group] %}
+          - url: "http://{{ hostvars[node].ansible_host | default(node) }}:{{ minio_api_port }}"
+{% endfor %}
+
+    minio-console:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+{% for node in groups[minio_node_group] %}
+          - url: "http://{{ hostvars[node].ansible_host | default(node) }}:{{ minio_console_port }}"
+{% endfor %}
