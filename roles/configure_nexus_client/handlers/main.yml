@@ -8,3 +8,8 @@
   ansible.builtin.service:
     name: docker
     state: restarted
+
+- name: Restart systemd-resolved after DNS configuration
+  ansible.builtin.systemd:
+    name: systemd-resolved
+    state: restarted

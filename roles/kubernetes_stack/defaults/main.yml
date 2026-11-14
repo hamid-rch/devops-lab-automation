@@ -1,0 +1,62 @@
+---
+# Kubernetes release pin. The matching APT repository must already be configured
+# by the user's Nexus/client role.
+k8s_version: "1.37.1"
+k8s_package_revision: "1.1"
+k8s_apt_cache_valid_time: 3600
+
+# Existing inventory group names. Override these if the current inventory uses
+# different group names. The role does not create or modify inventory.
+k8s_lb_group: "loadbalancers"
+k8s_control_plane_group: "masters"
+k8s_worker_group: "workers"
+k8s_control_plane_leader: "master1"
+k8s_expected_lb_nodes: 3
+k8s_expected_control_plane_nodes: 3
+k8s_expected_worker_nodes: 3
+
+# Vagrant host-only network. An explicit per-host `k8s_node_ip` variable takes
+# precedence; otherwise the role discovers an address matching this regex.
+k8s_node_ip_regex: '^192\.168\.56\.'
+k8s_node_network_cidr: "192.168.56.0/24"
+k8s_lb_interface: "eth1"
+
+# HAProxy / Keepalived API endpoint.
+k8s_api_vip: "192.168.56.100"
+k8s_api_vip_prefix: 24
+k8s_api_port: 6443
+k8s_keepalived_virtual_router_id: 51
+k8s_keepalived_priorities: [150, 140, 130]
+# VRRP PASS authentication is limited by Keepalived to 8 characters.
+# Override this in Ansible Vault for your own lab.
+k8s_keepalived_auth_pass: "K8sHA123"
+k8s_haproxy_maxconn: 2048
+
+# Kubernetes cluster network ranges. Keep these non-overlapping with the
+# host, VirtualBox, and Nexus networks.
+k8s_pod_subnet: "10.244.0.0/16"
+k8s_service_subnet: "10.96.0.0/12"
+
+# Containerd is already installed and Nexus registry configuration is managed
+# elsewhere. This role only verifies it and enables systemd cgroups.
+k8s_cri_socket: "unix:///run/containerd/containerd.sock"
+k8s_containerd_config: "/etc/containerd/config.toml"
+k8s_manage_containerd_cgroup: true
+
+# kubeadm pulls core Kubernetes images from this Nexus Docker proxy path.
+# This reflects the Nexus path used in the user's existing lab.
+k8s_image_repository: "nexus.lab/shecan-k8s-images"
+
+# Calico manifest and image source. Override the manifest URL with the exact
+# Nexus Raw Proxy URL if that repository is configured. Calico images use Quay
+# by default; containerd's existing quay.io mirror should point to Nexus.
+k8s_calico_version: "v3.33.0"
+k8s_calico_manifest_url: "https://raw.githubusercontent.com/projectcalico/calico/{{ k8s_calico_version }}/manifests/calico.yaml"
+k8s_calico_manifest_path: "/opt/kubernetes/calico-{{ k8s_calico_version }}.yaml"
+k8s_calico_source_image_prefix: "quay.io/calico"
+k8s_calico_image_prefix: "nexus.lab/shecan-quay-proxy/calico"
+k8s_calico_rollout_timeout: "600s"
+k8s_node_ready_timeout: "600s"
+
+# Install kubectl on all Kubernetes nodes (useful for this learning lab).
+k8s_install_kubectl_on_workers: true

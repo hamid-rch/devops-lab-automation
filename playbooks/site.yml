@@ -13,20 +13,37 @@
 #   roles:
 #     - docker
 
-# - name: install nexus and minio and traefik
-#   hosts: toolsStack
+- name: install nexus and minio and traefik
+  hosts: toolsStack
+  become: true
+
+  roles:
+    - tools_stack
+
+# - name: Configure MinIO bucket versioning
+#   hosts: minio_stack
 #   become: true
+#   roles:
+#     - minio_stack
+#   tasks:
+#     - name: Ensure versioning is enabled on the lab bucket
+#       ansible.builtin.include_role:
+#         name: minio_stack
+#         tasks_from: versioning
+
+# - name: Configure SSH Access Across Kubernetes Lab
+#   hosts: k8s_stack
+#   gather_facts: false
 
 #   roles:
-#     - tools_stack
+#     - ssh_stack
 
-- name: Configure MinIO bucket versioning
-  hosts: minio_stack
-  become: true
-  roles:
-    - minio_stack
-  tasks:
-    - name: Ensure versioning is enabled on the lab bucket
-      ansible.builtin.include_role:
-        name: minio_stack
-        tasks_from: versioning
+# - name: Configure Containerd and Nexus
+#   hosts: k8s_stack
+#   become: true
+#   gather_facts: true
+#   roles:
+#     # - configure_nexus_client
+#     # - containerd_stack
+#     # - configure_containerd_nexus
+#     - kubernetes_stack

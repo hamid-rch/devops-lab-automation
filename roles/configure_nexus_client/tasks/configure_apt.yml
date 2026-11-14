@@ -173,3 +173,50 @@
   when:
     - not (repositories_docker_ce_enabled | bool)
     - repositories_docker_ce_source_stat.stat.exists
+
+- name: Validate Kubernetes APT mirror selection
+  ansible.builtin.assert:
+    that:
+      - repositories_kubernetes_apt_mirror in ['official', 'shecan']
+    fail_msg: "repositories_kubernetes_apt_mirror must be official or shecan."
+    quiet: true
+  when: repositories_kubernetes_apt_enabled | bool
+
+- name: Ensure python3-debian is installed for Kubernetes APT repository
+  ansible.builtin.apt:
+    name: python3-debian
+    state: present
+  when: repositories_kubernetes_apt_enabled | bool
+
+- name: Remove temporary Kubernetes APT test source
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/kubernetes.list
+    state: absent
+
+- name: Configure Kubernetes APT repository through Nexus
+  ansible.builtin.deb822_repository:
+    name: "{{ repositories_kubernetes_apt_repo_name }}"
+    types:
+      - deb
+    uris:
+      - >-
+        {{ repositories_nexus_base_url }}/repository/{{
+          'shecan-kubernetes-apt'
+          if repositories_kubernetes_apt_mirror == 'shecan'
+          else 'kubernetes-apt'
+        }}/
+    suites:
+      - /
+    trusted: "{{ repositories_kubernetes_apt_trusted | bool }}"
+    state: present
+    enabled: true
+    mode: "0644"
+  notify: Update APT cache
+  when: repositories_kubernetes_apt_enabled | bool
+
+- name: Remove Kubernetes APT repository when disabled
+  ansible.builtin.deb822_repository:
+    name: "{{ repositories_kubernetes_apt_repo_name }}"
+    state: absent
+  notify: Update APT cache
+  when: not (repositories_kubernetes_apt_enabled | bool)

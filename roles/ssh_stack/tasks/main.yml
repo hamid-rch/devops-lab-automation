@@ -1,0 +1,13 @@
+---
+- name: Read SSH public key from Ansible Controller
+  ansible.builtin.set_fact:
+    ssh_stack_public_key: "{{ lookup('file', ssh_stack_public_key_path) }}"
+  run_once: true
+  delegate_to: localhost
+
+- name: Install controller SSH public key on target machines
+  ansible.posix.authorized_key:
+    user: "{{ ssh_stack_user }}"
+    key: "{{ ssh_stack_public_key }}"
+    state: "{{ ssh_stack_key_state }}"
+    manage_dir: "{{ ssh_stack_manage_dir }}"

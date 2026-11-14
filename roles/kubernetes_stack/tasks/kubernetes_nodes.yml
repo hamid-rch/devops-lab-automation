@@ -1,0 +1,173 @@
+---
+- name: Disable swap immediately
+  ansible.builtin.command: swapoff -a
+  changed_when: false
+
+- name: Disable swap persistently in fstab
+  ansible.builtin.replace:
+    path: /etc/fstab
+    regexp: '(?m)^(?!\s*#)(\S+\s+\S+\s+swap\s+.*)$'
+    replace: '# \1'
+    backup: true
+
+- name: Persist required kernel modules
+  ansible.builtin.template:
+    src: modules-load.conf.j2
+    dest: /etc/modules-load.d/kubernetes.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Load required kernel modules
+  ansible.builtin.command: "modprobe {{ item }}"
+  loop:
+    - overlay
+    - br_netfilter
+  changed_when: false
+
+- name: Configure Kubernetes networking sysctls
+  ansible.builtin.sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/99-kubernetes-cri.conf
+    sysctl_set: true
+    reload: true
+    state: present
+  loop:
+    - { name: net.ipv4.ip_forward, value: "1" }
+    - { name: net.bridge.bridge-nf-call-iptables, value: "1" }
+    - { name: net.bridge.bridge-nf-call-ip6tables, value: "1" }
+
+- name: Inspect the existing containerd config managed by the Nexus client setup
+  ansible.builtin.stat:
+    path: "{{ k8s_containerd_config }}"
+  register: k8s_containerd_config_stat
+
+- name: Require an existing containerd config so Nexus registry settings are preserved
+  ansible.builtin.assert:
+    that:
+      - k8s_containerd_config_stat.stat.exists
+      - k8s_containerd_config_stat.stat.isreg
+    fail_msg: >-
+      {{ k8s_containerd_config }} is missing on {{ inventory_hostname }}.
+      This role intentionally does not generate a default config because that
+      could discard the existing Nexus registry mirror configuration.
+
+- name: Enable systemd cgroup driver in existing containerd config
+  ansible.builtin.replace:
+    path: "{{ k8s_containerd_config }}"
+    regexp: '(?m)^([ \t]*SystemdCgroup[ \t]*=[ \t]*)false[ \t]*$'
+    replace: '\1true'
+    backup: true
+  when: k8s_manage_containerd_cgroup | bool
+  register: k8s_containerd_cgroup_result
+
+- name: Restart containerd if the cgroup configuration changed
+  ansible.builtin.systemd:
+    name: containerd
+    state: restarted
+    enabled: true
+    daemon_reload: true
+  when:
+    - k8s_manage_containerd_cgroup | bool
+    - k8s_containerd_cgroup_result.changed
+
+- name: Verify containerd config uses systemd cgroups
+  ansible.builtin.command:
+    argv:
+      - grep
+      - -Eq
+      - '^[[:space:]]*SystemdCgroup[[:space:]]*=[[:space:]]*true[[:space:]]*$'
+      - "{{ k8s_containerd_config }}"
+  changed_when: false
+  when: k8s_manage_containerd_cgroup | bool
+
+- name: Install Kubernetes prerequisites from configured APT repositories
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - gpg
+      - socat
+      - conntrack
+      - ipset
+      - iptables
+      - ebtables
+      - ethtool
+    state: present
+    update_cache: true
+    cache_valid_time: "{{ k8s_apt_cache_valid_time }}"
+
+- name: Install Kubernetes {{ k8s_version }} components from the configured APT repository
+  ansible.builtin.apt:
+    name:
+      - "kubelet={{ k8s_version }}-{{ k8s_package_revision }}"
+      - "kubeadm={{ k8s_version }}-{{ k8s_package_revision }}"
+    state: present
+    update_cache: true
+    cache_valid_time: "{{ k8s_apt_cache_valid_time }}"
+    allow_downgrade: true
+
+- name: Install pinned kubectl on Kubernetes nodes
+  ansible.builtin.apt:
+    name: "kubectl={{ k8s_version }}-{{ k8s_package_revision }}"
+    state: present
+    update_cache: true
+    cache_valid_time: "{{ k8s_apt_cache_valid_time }}"
+    allow_downgrade: true
+  when:
+    - inventory_hostname in groups.get(k8s_control_plane_group, []) or k8s_install_kubectl_on_workers | bool
+
+- name: Verify kubelet version matches the pinned Kubernetes release
+  ansible.builtin.command: kubelet --version
+  register: k8s_kubelet_version
+  changed_when: false
+  failed_when: k8s_version not in k8s_kubelet_version.stdout
+
+- name: Verify kubeadm version matches the pinned Kubernetes release
+  ansible.builtin.command: kubeadm version -o short
+  register: k8s_kubeadm_version
+  changed_when: false
+  failed_when: (k8s_kubeadm_version.stdout | trim) != ('v' ~ k8s_version)
+
+- name: Verify kubectl version on nodes where it is installed
+  ansible.builtin.command: kubectl version --client -o yaml
+  register: k8s_kubectl_version
+  changed_when: false
+  failed_when: k8s_version not in k8s_kubectl_version.stdout
+  when:
+    - inventory_hostname in groups.get(k8s_control_plane_group, []) or k8s_install_kubectl_on_workers | bool
+
+- name: Hold kubelet and kubeadm to prevent unattended Kubernetes upgrades
+  ansible.builtin.command: apt-mark hold kubelet kubeadm
+  changed_when: false
+
+- name: Hold kubectl when installed by this role
+  ansible.builtin.command: apt-mark hold kubectl
+  changed_when: false
+  when:
+    - inventory_hostname in groups.get(k8s_control_plane_group, []) or k8s_install_kubectl_on_workers | bool
+
+- name: Set kubelet node IP to the cluster network address
+  ansible.builtin.template:
+    src: kubelet-default.j2
+    dest: /etc/default/kubelet
+    owner: root
+    group: root
+    mode: "0644"
+  register: k8s_kubelet_env_result
+
+- name: Restart kubelet if its node IP configuration changed
+  ansible.builtin.systemd:
+    name: kubelet
+    enabled: true
+    state: restarted
+    daemon_reload: true
+  when: k8s_kubelet_env_result.changed
+
+- name: Ensure kubelet service is enabled and running
+  ansible.builtin.systemd:
+    name: kubelet
+    enabled: true
+    state: started
+    daemon_reload: true

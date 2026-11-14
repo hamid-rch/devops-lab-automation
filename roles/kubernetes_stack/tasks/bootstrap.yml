@@ -1,0 +1,253 @@
+---
+- name: Create Kubernetes configuration directory on control-plane leader
+  ansible.builtin.file:
+    path: /etc/kubernetes
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: inventory_hostname == k8s_control_plane_leader
+
+- name: Render kubeadm init configuration on control-plane leader
+  ansible.builtin.template:
+    src: kubeadm-init-config.yaml.j2
+    dest: /etc/kubernetes/kubeadm-init-config.yaml
+    owner: root
+    group: root
+    mode: "0600"
+  when: inventory_hostname == k8s_control_plane_leader
+
+- name: Check whether the first control plane is already initialized
+  ansible.builtin.stat:
+    path: /etc/kubernetes/admin.conf
+  register: k8s_admin_conf_stat
+  when: inventory_hostname == k8s_control_plane_leader
+
+- name: Initialize the first control plane using stacked etcd
+  ansible.builtin.command:
+    argv:
+      - kubeadm
+      - init
+      - --config
+      - /etc/kubernetes/kubeadm-init-config.yaml
+  when:
+    - inventory_hostname == k8s_control_plane_leader
+    - not k8s_admin_conf_stat.stat.exists
+
+- name: Wait for the first API server to listen
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 6443
+    state: started
+    timeout: 300
+  when: inventory_hostname == k8s_control_plane_leader
+
+- name: Verify API endpoint through the Keepalived VIP and HAProxy
+  ansible.builtin.wait_for:
+    host: "{{ k8s_api_vip }}"
+    port: "{{ k8s_api_port }}"
+    state: started
+    timeout: 180
+  when: inventory_hostname == k8s_control_plane_leader
+
+- name: Create root kubeconfig directory on control-plane leader
+  ansible.builtin.file:
+    path: /root/.kube
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  when: inventory_hostname == k8s_control_plane_leader
+
+- name: Install root kubeconfig on control-plane leader
+  ansible.builtin.copy:
+    src: /etc/kubernetes/admin.conf
+    dest: /root/.kube/config
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0600"
+  when: inventory_hostname == k8s_control_plane_leader
+
+- name: Create a temporary kubeadm join token
+  ansible.builtin.command:
+    argv:
+      - kubeadm
+      - token
+      - create
+      - --ttl
+      - 2h
+      - --print-join-command
+      - --kubeconfig
+      - /etc/kubernetes/super-admin.conf
+  register: k8s_join_command_result
+  changed_when: true
+  no_log: true
+  when: inventory_hostname == k8s_control_plane_leader
+
+- name: Upload control-plane certificates and retrieve certificate key
+  ansible.builtin.command: kubeadm init phase upload-certs --upload-certs --kubeconfig=/etc/kubernetes/super-admin.conf
+  register: k8s_upload_certs_result
+  changed_when: true
+  when: inventory_hostname == k8s_control_plane_leader
+
+- name: Store join command and certificate key on the leader for this play
+  ansible.builtin.set_fact:
+    k8s_join_command: "{{ k8s_join_command_result.stdout | trim }}"
+    k8s_certificate_key: "{{ k8s_upload_certs_result.stdout | regex_findall('(?m)^([a-f0-9]{64})$') | first | default('') }}"
+  when: inventory_hostname == k8s_control_plane_leader
+
+- name: Verify join command and certificate key were generated
+  ansible.builtin.assert:
+    that:
+      - k8s_join_command is defined
+      - k8s_join_command | trim | length > 0
+      - k8s_certificate_key is defined
+      - k8s_certificate_key | length == 64
+    fail_msg: "Could not generate kubeadm join data on {{ k8s_control_plane_leader }}."
+  when: inventory_hostname == k8s_control_plane_leader
+
+- name: Ensure Calico manifest directory exists on control-plane leader
+  ansible.builtin.file:
+    path: "{{ k8s_calico_manifest_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: inventory_hostname == k8s_control_plane_leader
+
+- name: Download pinned Calico manifest on control-plane leader
+  ansible.builtin.get_url:
+    url: "{{ k8s_calico_manifest_url }}"
+    dest: "{{ k8s_calico_manifest_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+    force: false
+    validate_certs: true
+  when: inventory_hostname == k8s_control_plane_leader
+
+- name: Set Calico IP pool to the Kubernetes Pod CIDR
+  ansible.builtin.replace:
+    path: "{{ k8s_calico_manifest_path }}"
+    regexp: '(?m)^([ \t]*)# - name: CALICO_IPV4POOL_CIDR\n\1#   value: "192\.168\.0\.0/16"$'
+    replace: '\1- name: CALICO_IPV4POOL_CIDR\n\1  value: "{{ k8s_pod_subnet }}"'
+    backup: true
+  when: inventory_hostname == k8s_control_plane_leader
+
+- name: Configure Calico node IP autodetection for the VirtualBox host-only network
+  ansible.builtin.replace:
+    path: "{{ k8s_calico_manifest_path }}"
+    regexp: '(?m)^([ \t]*)- name: IP\n\1  value: "autodetect"$'
+    replace: '\1- name: IP\n\1  value: "autodetect=cidr={{ k8s_node_network_cidr }}"'
+    backup: true
+  when: inventory_hostname == k8s_control_plane_leader
+
+- name: Verify Calico node IP autodetection uses the cluster network
+  ansible.builtin.command:
+    argv:
+      - grep
+      - -Fq
+      - 'value: "autodetect=cidr={{ k8s_node_network_cidr }}"'
+      - "{{ k8s_calico_manifest_path }}"
+  changed_when: false
+  when: inventory_hostname == k8s_control_plane_leader
+
+- name: Verify Calico manifest contains the configured Pod CIDR
+  ansible.builtin.command:
+    argv:
+      - grep
+      - -Fq
+      - 'value: "{{ k8s_pod_subnet }}"'
+      - "{{ k8s_calico_manifest_path }}"
+  changed_when: false
+  when: inventory_hostname == k8s_control_plane_leader
+
+- name: Rewrite Calico image prefix for the configured Nexus Quay proxy
+  ansible.builtin.replace:
+    path: "{{ k8s_calico_manifest_path }}"
+    regexp: "{{ k8s_calico_source_image_prefix | regex_escape }}"
+    replace: "{{ k8s_calico_image_prefix }}"
+  when:
+    - inventory_hostname == k8s_control_plane_leader
+    - k8s_calico_image_prefix != k8s_calico_source_image_prefix
+
+- name: Apply Calico CNI manifest
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - apply
+      - -f
+      - "{{ k8s_calico_manifest_path }}"
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  register: k8s_calico_apply_result
+  changed_when: "'configured' in k8s_calico_apply_result.stdout or 'created' in k8s_calico_apply_result.stdout"
+  when: inventory_hostname == k8s_control_plane_leader
+
+- name: Join additional control-plane nodes one at a time
+  ansible.builtin.command:
+    argv: >-
+      {{
+        hostvars[k8s_control_plane_leader].k8s_join_command.split()
+        + ['--control-plane',
+           '--certificate-key', hostvars[k8s_control_plane_leader].k8s_certificate_key,
+           '--apiserver-advertise-address', hostvars[item].k8s_node_ip_effective,
+           '--cri-socket', k8s_cri_socket]
+      }}
+    creates: /etc/kubernetes/kubelet.conf
+  delegate_to: "{{ item }}"
+  loop: "{{ groups[k8s_control_plane_group] | difference([k8s_control_plane_leader]) }}"
+  when: inventory_hostname == k8s_control_plane_leader
+
+- name: Join worker nodes to the cluster
+  ansible.builtin.command:
+    argv: >-
+      {{
+        hostvars[k8s_control_plane_leader].k8s_join_command.split()
+        + ['--cri-socket', k8s_cri_socket]
+      }}
+    creates: /etc/kubernetes/kubelet.conf
+  when: inventory_hostname in groups.get(k8s_worker_group, [])
+
+- name: Wait for Calico node DaemonSet rollout
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - -n
+      - kube-system
+      - rollout
+      - status
+      - daemonset/calico-node
+      - "--timeout={{ k8s_calico_rollout_timeout }}"
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  changed_when: false
+  when: inventory_hostname == k8s_control_plane_leader
+
+- name: Wait until all Kubernetes nodes become Ready
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - wait
+      - --for=condition=Ready
+      - node
+      - --all
+      - "--timeout={{ k8s_node_ready_timeout }}"
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  changed_when: false
+  when: inventory_hostname == k8s_control_plane_leader
+
+- name: Display final Kubernetes node status
+  ansible.builtin.command: kubectl get nodes -o wide
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  register: k8s_final_nodes
+  changed_when: false
+  when: inventory_hostname == k8s_control_plane_leader
+
+- name: Show Kubernetes node status
+  ansible.builtin.debug:
+    var: k8s_final_nodes.stdout_lines
+  when: inventory_hostname == k8s_control_plane_leader

@@ -1,0 +1,28 @@
+global
+    log /dev/log local0
+    log /dev/log local1 notice
+    maxconn {{ k8s_haproxy_maxconn }}
+    user haproxy
+    group haproxy
+    daemon
+
+defaults
+    log global
+    mode tcp
+    option tcplog
+    timeout connect 5s
+    timeout client  1m
+    timeout server  1m
+
+frontend kubernetes_api_frontend
+    bind *:{{ k8s_api_port }}
+    default_backend kubernetes_api_backend
+
+backend kubernetes_api_backend
+    mode tcp
+    balance roundrobin
+    option tcp-check
+    default-server inter 3s fall 3 rise 2
+{% for node in groups[k8s_control_plane_group] %}
+    server {{ node | regex_replace('[^A-Za-z0-9_-]', '_') }} {{ hostvars[node].k8s_node_ip_effective }}:{{ k8s_api_port }} check
+{% endfor %}

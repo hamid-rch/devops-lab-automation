@@ -1,0 +1,43 @@
+global_defs {
+    router_id {{ inventory_hostname | upper }}
+    enable_script_security
+    script_user root
+}
+
+vrrp_script chk_haproxy {
+    script "/usr/local/sbin/check-haproxy.sh"
+    interval 2
+    timeout 2
+    fall 2
+    rise 2
+    weight -40
+}
+
+vrrp_instance VI_KUBERNETES_API {
+{% set lb_index = groups[k8s_lb_group].index(inventory_hostname) %}
+    state {{ 'MASTER' if lb_index == 0 else 'BACKUP' }}
+    interface {{ k8s_lb_interface }}
+    virtual_router_id {{ k8s_keepalived_virtual_router_id }}
+    priority {{ k8s_keepalived_priorities[lb_index] }}
+    advert_int 1
+
+    authentication {
+        auth_type PASS
+        auth_pass {{ k8s_keepalived_auth_pass }}
+    }
+
+    unicast_src_ip {{ k8s_node_ip_effective }}
+    unicast_peer {
+{% for peer in groups[k8s_lb_group] if peer != inventory_hostname %}
+        {{ hostvars[peer].k8s_node_ip_effective }}
+{% endfor %}
+    }
+
+    virtual_ipaddress {
+        {{ k8s_api_vip }}/{{ k8s_api_vip_prefix }} dev {{ k8s_lb_interface }}
+    }
+
+    track_script {
+        chk_haproxy
+    }
+}

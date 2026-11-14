@@ -1,0 +1,82 @@
+---
+# - name: Ensure Nexus hostname is present in /etc/hosts
+#   ansible.builtin.lineinfile:
+#     path: /etc/hosts
+#     line: "192.168.56.30 nexus.lab"
+#     state: present
+#     regexp: '^\s*192\.168\.56\.30\s+nexus\.lab(?:\s|$)'
+#     owner: root
+#     group: root
+#     mode: "0644"
+#     backup: true
+
+- name: Validate DNS server list
+  ansible.builtin.assert:
+    that:
+      - repositories_dns_servers is sequence
+      - repositories_dns_servers is not string
+      - repositories_dns_servers | length > 0
+    fail_msg: "repositories_dns_servers must be a non-empty list."
+    quiet: true
+
+- name: Inspect /etc/resolv.conf
+  ansible.builtin.stat:
+    path: /etc/resolv.conf
+    follow: false
+  register: repositories_resolv_conf_stat
+
+- name: Inspect systemd-resolved service unit
+  ansible.builtin.stat:
+    path: /usr/lib/systemd/system/systemd-resolved.service
+  register: repositories_systemd_resolved_unit
+
+- name: Validate resolver symlink target
+  ansible.builtin.assert:
+    that:
+      - >-
+        (
+          repositories_resolv_conf_stat.stat.lnk_source
+          | default('')
+        ) is search('^/run/systemd/resolve/')
+      - repositories_systemd_resolved_unit.stat.exists
+    fail_msg: >-
+      /etc/resolv.conf is a symlink, but it does not appear to be
+      managed by systemd-resolved. Configure the active resolver
+      instead of modifying its generated file.
+    quiet: true
+  when: repositories_resolv_conf_stat.stat.islnk | default(false)
+
+- name: Create systemd-resolved drop-in directory
+  ansible.builtin.file:
+    path: "{{ repositories_dns_resolved_dropin_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: repositories_resolv_conf_stat.stat.islnk | default(false)
+
+- name: Configure DNS servers in systemd-resolved
+  ansible.builtin.copy:
+    dest: "{{ repositories_dns_resolved_dropin_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Resolve]
+      DNS={{ repositories_dns_servers | join(' ') }}
+  notify: Restart systemd-resolved after DNS configuration
+  when: repositories_resolv_conf_stat.stat.islnk | default(false)
+
+- name: Add DNS servers to static resolv.conf
+  ansible.builtin.lineinfile:
+    path: /etc/resolv.conf
+    regexp: '^nameserver\s+{{ item | regex_escape }}$'
+    line: "nameserver {{ item }}"
+    insertafter: EOF
+    create: true
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+  loop: "{{ repositories_dns_servers }}"
+  when: not (repositories_resolv_conf_stat.stat.islnk | default(false))

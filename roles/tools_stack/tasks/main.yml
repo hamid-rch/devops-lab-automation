@@ -36,3 +36,5 @@
 
 - name: Configure Nexus repositories
   ansible.builtin.import_tasks: configure_nexus_repositories.yml
+  tags:
+    - configure_nexus_repositories

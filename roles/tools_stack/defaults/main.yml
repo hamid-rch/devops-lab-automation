@@ -2,7 +2,7 @@
 tools_stack_dir: /opt/tools-stack
 
 traefik_image: "traefik:v3.7.17"
-nexus_image: "sonatype/nexus3:3.98.0"
+nexus_image: "sonatype/nexus3:3.98.1"
 
 # Fixed tag, not "latest".
 # This is a legacy release, not a claim of being the newest MinIO.

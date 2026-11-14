@@ -10,12 +10,34 @@
       Set a valid Nexus hostname, scheme (http or https), and TCP port.
     quiet: true
 
+- name: Configure host DNS resolvers
+  ansible.builtin.import_tasks: configure_dns.yml
+
+- name: Apply DNS configuration immediately
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait one second for DNS resolver
+  ansible.builtin.pause:
+    seconds: 1
+
+- name: Verify external DNS resolution
+  ansible.builtin.command:
+    cmd: resolvectl query download.docker.com
+  register: repositories_dns_check
+  changed_when: false
+  retries: 5
+  delay: 2
+  until: repositories_dns_check.rc == 0
+
 - name: Configure Nexus CA and Docker CE signing key
   ansible.builtin.import_tasks: configure_gpg.yml
   when: repositories_nexus_ca_enabled | bool or repositories_docker_ce_enabled | bool
 
 - name: Configure or restore Ubuntu and Docker CE APT sources
   ansible.builtin.import_tasks: configure_apt.yml
+
+- name: Apply pending repository changes before Kubernetes installation
+  ansible.builtin.meta: flush_handlers
 
 - name: Configure optional Docker daemon repository access
   ansible.builtin.import_tasks: configure_docker.yml

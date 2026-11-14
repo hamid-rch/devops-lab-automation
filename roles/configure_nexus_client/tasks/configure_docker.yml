@@ -16,6 +16,7 @@
             or repositories_docker_all_enabled | bool
           )
         )
+        or (repositories_dns_servers | length > 0)
       }}
   changed_when: false
 
@@ -193,6 +194,12 @@
       - >-
         repositories_docker_current_daemon_config.get('insecure-registries', [])
         is not string
+      - >-
+        repositories_docker_current_daemon_config.get('dns', [])
+        is sequence
+      - >-
+        repositories_docker_current_daemon_config.get('dns', [])
+        is not string
     fail_msg: >-
       {{ repositories_docker_daemon_config_path }} must be valid JSON with an
       object at the root; registry-mirrors and insecure-registries, when
@@ -303,6 +310,13 @@
         repositories_docker_desired_insecure_registries
         | reject('in', repositories_docker_base_insecure_registries) | list
       }}
+    repositories_docker_effective_dns: >-
+      {{
+        (
+          repositories_docker_current_daemon_config.get('dns', [])
+          + repositories_dns_servers
+        ) | unique | list
+      }}
   when: repositories_docker_daemon_config_requested | bool
   changed_when: false
 
@@ -324,6 +338,14 @@
             if (
               'insecure-registries' in repositories_docker_current_daemon_config
               or repositories_docker_effective_insecure_registries | length > 0
+            )
+            else {}
+          )
+        | combine(
+            {'dns': repositories_docker_effective_dns}
+            if (
+              'dns' in repositories_docker_current_daemon_config
+              or repositories_docker_effective_dns | length > 0
             )
             else {}
           )
@@ -399,6 +421,12 @@
 - name: Refresh SSH connection to apply updated group membership
   ansible.builtin.meta: reset_connection
 
+- name: Check if Docker is installed
+  ansible.builtin.command: which docker
+  register: docker_check
+  changed_when: false
+  failed_when: false
+
 - name: Log in to Nexus Docker registry for root and non-root users
   community.docker.docker_login:
     registry_url: "{{ repositories_nexus_hostname }}"
@@ -406,13 +434,10 @@
     password: "{{ nexus_admin_password }}"
     state: present
     reauthorize: false
-
   become: true
   become_user: "{{ item }}"
-
   loop: "{{ ['root', nexus_docker_login_user] | unique }}"
-
   loop_control:
     label: "{{ item }}"
-
+  when: docker_check.rc == 0
   no_log: true

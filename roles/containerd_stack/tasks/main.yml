@@ -1,0 +1,171 @@
+---
+- name: Validate supported operating system and release
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['distribution'] == 'Ubuntu'
+      - ansible_facts['distribution_release'] == 'noble'
+      - ansible_facts['distribution_version'] is version('24.04', '>=')
+      - ansible_facts['architecture'] in ['x86_64', 'aarch64']
+    fail_msg: >-
+      containerd_stack pins the official containerd.io package for Ubuntu
+      24.04 (Noble). Detected {{ ansible_facts['distribution'] | default('unknown') }}
+      {{ ansible_facts['distribution_version'] | default('unknown') }} on
+      {{ ansible_facts['architecture'] | default('unknown') }}.
+    quiet: true
+
+- name: Refresh APT package metadata
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: "{{ containerd_stack_apt_cache_valid_time }}"
+
+- name: Remove conflicting distro containerd packages when explicitly requested
+  ansible.builtin.apt:
+    name: "{{ containerd_stack_conflicting_packages }}"
+    state: absent
+    purge: false
+    autoremove: false
+  when: containerd_stack_remove_conflicting_packages | bool
+
+- name: Install pinned containerd.io package without installing Docker Engine
+  ansible.builtin.apt:
+    name: "{{ containerd_stack_package_name }}={{ containerd_stack_package_version }}"
+    state: present
+    update_cache: false
+    allow_downgrade: false
+
+- name: Inspect Containerd configuration file
+  ansible.builtin.stat:
+    path: "{{ containerd_stack_config_path }}"
+  register: containerd_stack_config_stat
+
+- name: Read existing Containerd configuration
+  ansible.builtin.slurp:
+    src: "{{ containerd_stack_config_path }}"
+  register: containerd_stack_existing_config
+  when: containerd_stack_config_stat.stat.exists
+
+- name: Check whether existing configuration contains SystemdCgroup
+  ansible.builtin.set_fact:
+    containerd_stack_config_has_cgroup: >-
+      {{
+        containerd_stack_existing_config.content | b64decode
+        | regex_findall('(?m)^\s*SystemdCgroup\s*=')
+        | length == 1
+      }}
+  when: containerd_stack_config_stat.stat.exists
+
+- name: Generate upstream default Containerd configuration
+  ansible.builtin.command:
+    argv:
+      - containerd
+      - config
+      - default
+  register: containerd_stack_default_config
+  changed_when: false
+  when: >-
+    not containerd_stack_config_stat.stat.exists
+    or (
+      not (containerd_stack_config_has_cgroup | default(false))
+      and containerd_stack_rebuild_invalid_config | bool
+    )
+
+- name: Validate generated Containerd configuration
+  ansible.builtin.assert:
+    that:
+      - >-
+        containerd_stack_default_config.stdout
+        | regex_findall('(?m)^\s*SystemdCgroup\s*=')
+        | length == 1
+    fail_msg: >-
+      Generated Containerd configuration does not contain exactly one
+      SystemdCgroup option.
+    quiet: true
+  when: containerd_stack_default_config is not skipped
+
+- name: Install upstream default Containerd configuration
+  ansible.builtin.copy:
+    content: "{{ containerd_stack_default_config.stdout }}\n"
+    dest: "{{ containerd_stack_config_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+  when: containerd_stack_default_config is not skipped
+  notify: Restart containerd after base configuration
+
+- name: Reject incomplete existing Containerd configuration
+  ansible.builtin.assert:
+    that:
+      - containerd_stack_config_has_cgroup | default(false)
+    fail_msg: >-
+      Existing Containerd configuration is incomplete.
+      Enable containerd_stack_rebuild_invalid_config to regenerate
+      the upstream default configuration.
+    quiet: true
+  when:
+    - containerd_stack_config_stat.stat.exists
+    - containerd_stack_default_config is skipped
+
+- name: Read the Containerd configuration before applying the cgroup setting
+  ansible.builtin.slurp:
+    src: "{{ containerd_stack_config_path }}"
+  register: containerd_stack_config_slurp
+
+- name: Ensure the upstream config has the SystemdCgroup option
+  ansible.builtin.assert:
+    that:
+      - >-
+        (containerd_stack_config_slurp.content | b64decode
+        | regex_findall('(?m)^\s*SystemdCgroup\s*=') | length) == 1
+    fail_msg: >-
+      Expected exactly one SystemdCgroup option in {{ containerd_stack_config_path }}.
+      The role will not append the option outside its TOML runtime section.
+    quiet: true
+
+- name: Configure the systemd cgroup driver
+  ansible.builtin.lineinfile:
+    path: "{{ containerd_stack_config_path }}"
+    regexp: '^\s*SystemdCgroup\s*='
+    line: "        SystemdCgroup = {{ containerd_stack_systemd_cgroup | ternary('true', 'false') }}"
+    backup: true
+  notify: Restart containerd after base configuration
+
+- name: Enable and start Containerd
+  ansible.builtin.systemd:
+    name: "{{ containerd_stack_service_name }}"
+    enabled: true
+    state: started
+
+- name: Apply pending Containerd configuration changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Read the active Containerd configuration
+  ansible.builtin.command:
+    argv:
+      - containerd
+      - config
+      - dump
+  register: containerd_stack_active_config
+  changed_when: false
+
+- name: Verify systemd cgroup configuration is active
+  ansible.builtin.assert:
+    that:
+      - >-
+        (containerd_stack_active_config.stdout
+        | regex_search('(?m)^\s*SystemdCgroup\s*=\s*true\s*$')) is not none
+        or not (containerd_stack_systemd_cgroup | bool)
+    fail_msg: >-
+      Containerd's active configuration does not show SystemdCgroup=true.
+      Inspect {{ containerd_stack_config_path }}.
+    quiet: true
+
+- name: Verify the Containerd service is active
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - is-active
+      - "{{ containerd_stack_service_name }}"
+  register: containerd_stack_service_status
+  changed_when: false
+  failed_when: containerd_stack_service_status.stdout | trim != 'active'

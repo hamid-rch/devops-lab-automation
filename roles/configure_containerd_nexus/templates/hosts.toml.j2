@@ -1,0 +1,6 @@
+# Managed by Ansible: configure_containerd_nexus
+# Nexus Repository path-based image references include the repository name.
+# Example: {{ configure_containerd_nexus_registry_authority }}/k8s-proxy/coredns/coredns:v1.14.7
+
+server = "{{ configure_containerd_nexus_scheme }}://{{ configure_containerd_nexus_registry_authority }}"
+capabilities = [{% for capability in configure_containerd_nexus_capabilities %}"{{ capability }}"{% if not loop.last %}, {% endif %}{% endfor %}]

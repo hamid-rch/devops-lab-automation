@@ -1,0 +1,19 @@
+---
+# Pinned latest stable containerd.io package for Ubuntu 24.04 (Noble),
+# verified against Docker's official Ubuntu package repository on 2026-11-11.
+# Update this variable deliberately when adopting a newer stable release.
+containerd_stack_package_name: containerd.io
+containerd_stack_package_version: "2.4.2-3~ubuntu.24.04~noble"
+
+containerd_stack_config_path: /etc/containerd/config.toml
+containerd_stack_systemd_cgroup: true
+containerd_stack_apt_cache_valid_time: 3600
+containerd_stack_service_name: containerd
+containerd_stack_rebuild_invalid_config: true
+
+# Set true only if this node has conflicting distro packages installed.
+# The role never removes existing containerd/runc packages by default.
+containerd_stack_remove_conflicting_packages: false
+containerd_stack_conflicting_packages:
+  - containerd
+  - runc

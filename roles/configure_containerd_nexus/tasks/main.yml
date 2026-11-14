@@ -1,0 +1,136 @@
+---
+- name: Validate Nexus registry settings
+  ansible.builtin.assert:
+    that:
+      - configure_containerd_nexus_registry_host | length > 0
+      - configure_containerd_nexus_scheme in ['http', 'https']
+      - configure_containerd_nexus_port | int > 0
+      - configure_containerd_nexus_port | int < 65536
+      - configure_containerd_nexus_capabilities | length > 0
+      - configure_containerd_nexus_capabilities | difference(['pull', 'resolve', 'push']) | length == 0
+    fail_msg: >-
+      Provide a valid Nexus registry host, http/https scheme, TCP port, and
+      valid Containerd registry capabilities.
+    quiet: true
+
+- name: Check that Containerd is installed
+  ansible.builtin.command:
+    argv:
+      - containerd
+      - --version
+  register: configure_containerd_nexus_version
+  changed_when: false
+
+- name: Check that Containerd config exists
+  ansible.builtin.stat:
+    path: "{{ configure_containerd_nexus_config_path }}"
+  register: configure_containerd_nexus_config_stat
+
+- name: Require Containerd to be configured before adding Nexus registry settings
+  ansible.builtin.assert:
+    that:
+      - configure_containerd_nexus_config_stat.stat.exists
+      - configure_containerd_nexus_config_stat.stat.isreg
+    fail_msg: >-
+      {{ configure_containerd_nexus_config_path }} was not found. Run the
+      containerd_stack role before configure_containerd_nexus.
+    quiet: true
+
+- name: Read Containerd configuration
+  ansible.builtin.slurp:
+    src: "{{ configure_containerd_nexus_config_path }}"
+  register: configure_containerd_nexus_config_slurp
+
+
+- name: Validate that Containerd CRI registry section contains exactly one config_path setting
+  ansible.builtin.assert:
+    that:
+      - >-
+        (
+          (configure_containerd_nexus_config_slurp.content | b64decode)
+          | regex_findall(
+              '(?ms)^[ \t]*\[plugins\.\x27io\.containerd\.cri\.v1\.images\x27\.registry\][ \t]*\n(?:(?!^[ \t]*\[).*\n)*?^[ \t]*config_path[ \t]*='
+            )
+          | length
+        ) == 1
+    fail_msg: >-
+      Expected exactly one config_path setting inside the
+      io.containerd.cri.v1.images.registry section.
+      Inspect {{ configure_containerd_nexus_config_path }}.
+    quiet: true
+
+- name: Configure Containerd CRI registry config_path for Nexus
+  ansible.builtin.replace:
+    path: "{{ configure_containerd_nexus_config_path }}"
+    regexp: >-
+      (?ms)(^[ \t]*\[plugins\.\x27io\.containerd\.cri\.v1\.images\x27\.registry\][ \t]*\n(?:(?!^[ \t]*\[).*\n)*?^[ \t]*config_path[ \t]*=[ \t]*)[^\n]*
+    replace: '\g<1>"{{ configure_containerd_nexus_certs_dir }}"'
+    backup: true
+  notify: Restart containerd after Nexus registry configuration
+
+- name: Read Containerd configuration before setting sandbox image
+  ansible.builtin.slurp:
+    src: "{{ configure_containerd_nexus_config_path }}"
+  register: configure_containerd_nexus_sandbox_config
+
+- name: Validate pinned sandbox image setting
+  ansible.builtin.assert:
+    that:
+      - >-
+        (
+          configure_containerd_nexus_sandbox_config.content
+          | b64decode
+          | regex_findall('(?m)^\s*sandbox\s*=')
+          | length
+        ) == 1
+    fail_msg: >-
+      Expected exactly one pinned_images.sandbox setting in
+      {{ configure_containerd_nexus_config_path }}.
+    quiet: true
+
+- name: Configure Containerd sandbox image to use Nexus
+  ansible.builtin.lineinfile:
+    path: "{{ configure_containerd_nexus_config_path }}"
+    regexp: '^\s*sandbox\s*='
+    line: "      sandbox = '{{ configure_containerd_nexus_sandbox_image }}'"
+    backup: true
+  notify: Restart containerd after Nexus registry configuration
+
+
+- name: Create Containerd registry configuration directory
+  ansible.builtin.file:
+    path: "{{ configure_containerd_nexus_certs_dir }}/{{ configure_containerd_nexus_registry_authority }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Configure Nexus HTTP/HTTPS endpoint for Containerd
+  ansible.builtin.template:
+    src: hosts.toml.j2
+    dest: >-
+      {{ configure_containerd_nexus_certs_dir }}/{{ configure_containerd_nexus_registry_authority }}/hosts.toml
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+  notify: Restart containerd after Nexus registry configuration
+
+- name: Enable and start Containerd
+  ansible.builtin.systemd:
+    name: "{{ configure_containerd_nexus_service_name }}"
+    enabled: true
+    state: started
+
+- name: Apply pending Containerd registry configuration changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Verify Containerd is active after Nexus configuration
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - is-active
+      - "{{ configure_containerd_nexus_service_name }}"
+  register: configure_containerd_nexus_service_status
+  changed_when: false
+  failed_when: configure_containerd_nexus_service_status.stdout | trim != 'active'

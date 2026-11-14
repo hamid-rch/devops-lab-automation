@@ -1,0 +1,68 @@
+---
+- name: Validate Kubernetes inventory groups
+  ansible.builtin.assert:
+    that:
+      - groups.get(k8s_lb_group, []) | length == k8s_expected_lb_nodes
+      - groups.get(k8s_control_plane_group, []) | length == k8s_expected_control_plane_nodes
+      - groups.get(k8s_worker_group, []) | length == k8s_expected_worker_nodes
+      - k8s_control_plane_leader in groups.get(k8s_control_plane_group, [])
+      - k8s_keepalived_priorities | length == k8s_expected_lb_nodes
+      - (groups.get(k8s_lb_group, []) | intersect(groups.get(k8s_control_plane_group, [])) | length) == 0
+      - (groups.get(k8s_lb_group, []) | intersect(groups.get(k8s_worker_group, [])) | length) == 0
+      - (groups.get(k8s_control_plane_group, []) | intersect(groups.get(k8s_worker_group, [])) | length) == 0
+    fail_msg: >-
+      Expected {{ k8s_expected_lb_nodes }} hosts in [{{ k8s_lb_group }}],
+      {{ k8s_expected_control_plane_nodes }} in [{{ k8s_control_plane_group }}],
+      and {{ k8s_expected_worker_nodes }} in [{{ k8s_worker_group }}].
+      Also verify k8s_control_plane_leader and the group names in role vars.
+  run_once: true
+  delegate_to: localhost
+
+- name: Resolve this host's Kubernetes network address
+  ansible.builtin.set_fact:
+    k8s_node_ip_effective: >-
+      {{
+        (k8s_node_ip | string)
+        if (k8s_node_ip is defined and (k8s_node_ip | string | length > 0))
+        else
+        (ansible_facts['all_ipv4_addresses'] | select('match', k8s_node_ip_regex) | list | first | default(''))
+      }}
+  when: >-
+    inventory_hostname in groups.get(k8s_lb_group, []) or
+    inventory_hostname in groups.get(k8s_control_plane_group, []) or
+    inventory_hostname in groups.get(k8s_worker_group, [])
+
+- name: Validate resolved node address
+  ansible.builtin.assert:
+    that:
+      - k8s_node_ip_effective | length > 0
+    fail_msg: >-
+      Could not find this host's cluster-network IP. Set `k8s_node_ip` for
+      {{ inventory_hostname }} or adjust k8s_node_ip_regex.
+  when: >-
+    inventory_hostname in groups.get(k8s_lb_group, []) or
+    inventory_hostname in groups.get(k8s_control_plane_group, []) or
+    inventory_hostname in groups.get(k8s_worker_group, [])
+
+- name: Prepare common host prerequisites
+  ansible.builtin.import_tasks: preflight.yml
+  when: >-
+    inventory_hostname in groups.get(k8s_lb_group, []) or
+    inventory_hostname in groups.get(k8s_control_plane_group, []) or
+    inventory_hostname in groups.get(k8s_worker_group, [])
+
+- name: Configure HAProxy and Keepalived nodes
+  ansible.builtin.import_tasks: loadbalancer.yml
+  when: inventory_hostname in groups.get(k8s_lb_group, [])
+
+- name: Prepare Kubernetes control-plane and worker nodes
+  ansible.builtin.import_tasks: kubernetes_nodes.yml
+  when: >-
+    inventory_hostname in groups.get(k8s_control_plane_group, []) or
+    inventory_hostname in groups.get(k8s_worker_group, [])
+
+- name: Bootstrap the HA Kubernetes cluster
+  ansible.builtin.import_tasks: bootstrap.yml
+  when: >-
+    inventory_hostname in groups.get(k8s_control_plane_group, []) or
+    inventory_hostname in groups.get(k8s_worker_group, [])

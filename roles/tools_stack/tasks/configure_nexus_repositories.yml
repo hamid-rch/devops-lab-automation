@@ -227,6 +227,13 @@
     return_content: false
   when: "'DockerToken' not in nexus_active_realms.json"
 
+- name: Debug Nexus repository detection
+  ansible.builtin.debug:
+    msg:
+      - "Nexus API: {{ tools_stack_nexus_api_base_url }}/service/rest/v1/repositories"
+      - "Detected repositories: {{ nexus_repositories.json | map(attribute='name') | list }}"
+      - "Ubuntu archive exists: {{ 'ubuntu-archive' in (nexus_repositories.json | map(attribute='name') | list) }}"
+
 - name: Create missing Docker and APT repositories
   ansible.builtin.uri:
     url: "{{ tools_stack_nexus_api_base_url }}/service/rest/v1/{{ item.endpoint }}"
@@ -466,6 +473,185 @@
     label: "{{ item.name }}"
   when: item.name not in (nexus_repositories.json | map(attribute='name') | list)
 
+- name: Create Kubernetes APT proxy when missing
+  ansible.builtin.uri:
+    url: "{{ tools_stack_nexus_api_base_url }}/service/rest/v1/repositories/apt/proxy"
+    method: POST
+    validate_certs: "{{ tools_stack_tls_enabled | bool }}"
+    use_proxy: false
+    ca_path: "{{ (tools_stack_certificate_remote_dir ~ '/lab-root-ca.crt') if (tools_stack_tls_enabled | bool) else omit }}"
+    headers:
+      Host: "{{ nexus_hostname }}"
+      Content-Type: application/json
+      Accept: application/json
+    url_username: admin
+    url_password: "{{ nexus_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    body:
+      name: kubernetes-apt
+      online: true
+      storage:
+        blobStoreName: apt-data
+        strictContentTypeValidation: true
+      proxy:
+        remoteUrl: https://pkgs.k8s.io/core:/stable:/v1.37/deb/
+        contentMaxAge: 1440
+        metadataMaxAge: 1440
+      negativeCache:
+        enabled: true
+        timeToLive: 1440
+      httpClient:
+        blocked: false
+        autoBlock: true
+      apt:
+        distribution: ""
+        flat: true
+    status_code:
+      - 200
+      - 201
+      - 204
+    return_content: true
+  when: "'kubernetes-apt' not in (nexus_repositories.json | map(attribute='name') | list)"
+
+- name: Create Shecan Kubernetes Docker proxy when missing
+  ansible.builtin.uri:
+    url: "{{ tools_stack_nexus_api_base_url }}/service/rest/v1/repositories/docker/proxy"
+    method: POST
+    validate_certs: "{{ tools_stack_tls_enabled | bool }}"
+    use_proxy: false
+    ca_path: "{{ (tools_stack_certificate_remote_dir ~ '/lab-root-ca.crt') if (tools_stack_tls_enabled | bool) else omit }}"
+    headers:
+      Host: "{{ nexus_hostname }}"
+      Content-Type: application/json
+      Accept: application/json
+    url_username: admin
+    url_password: "{{ nexus_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    body:
+      name: shecan-k8s-images
+      online: true
+      storage:
+        blobStoreName: docker-proxy-data
+        strictContentTypeValidation: true
+      proxy:
+        remoteUrl: https://mirror-k8s.pkg.shecan.ir/
+        contentMaxAge: 1440
+        metadataMaxAge: 1440
+      negativeCache:
+        enabled: true
+        timeToLive: 1440
+      httpClient:
+        blocked: false
+        autoBlock: true
+      docker:
+        v1Enabled: false
+        forceBasicAuth: false
+        pathEnabled: true
+      dockerProxy:
+        indexType: REGISTRY
+        cacheForeignLayers: false
+    status_code:
+      - 200
+      - 201
+      - 204
+    return_content: true
+  when: "'shecan-k8s-images' not in (nexus_repositories.json | map(attribute='name') | list)"
+
+- name: Create Shecan Kubernetes APT proxy when missing
+  ansible.builtin.uri:
+    url: "{{ tools_stack_nexus_api_base_url }}/service/rest/v1/repositories/apt/proxy"
+    method: POST
+    validate_certs: "{{ tools_stack_tls_enabled | bool }}"
+    use_proxy: false
+    ca_path: "{{ (tools_stack_certificate_remote_dir ~ '/lab-root-ca.crt') if (tools_stack_tls_enabled | bool) else omit }}"
+    headers:
+      Host: "{{ nexus_hostname }}"
+      Content-Type: application/json
+      Accept: application/json
+    url_username: admin
+    url_password: "{{ nexus_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    body:
+      name: shecan-kubernetes-apt
+      online: true
+      storage:
+        blobStoreName: apt-data
+        strictContentTypeValidation: true
+      proxy:
+        remoteUrl: https://mirror-kubernetes.pkg.shecan.ir/core:/stable:/v1.37/deb/
+        contentMaxAge: 1440
+        metadataMaxAge: 1440
+      negativeCache:
+        enabled: true
+        timeToLive: 1440
+      httpClient:
+        blocked: false
+        autoBlock: true
+      apt:
+        distribution: ""
+        flat: true
+    status_code:
+      - 200
+      - 201
+      - 204
+    return_content: true
+  when: "'shecan-kubernetes-apt' not in (nexus_repositories.json | map(attribute='name') | list)"
+
+
+- name: Create Shecan Quay Docker proxy when missing
+  ansible.builtin.uri:
+    url: "{{ tools_stack_nexus_api_base_url }}/service/rest/v1/repositories/docker/proxy"
+    method: POST
+    validate_certs: "{{ tools_stack_tls_enabled | bool }}"
+    use_proxy: false
+    ca_path: "{{ (tools_stack_certificate_remote_dir ~ '/lab-root-ca.crt') if (tools_stack_tls_enabled | bool) else omit }}"
+    headers:
+      Host: "{{ nexus_hostname }}"
+      Content-Type: application/json
+      Accept: application/json
+    url_username: admin
+    url_password: "{{ nexus_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    body:
+      name: shecan-quay-proxy
+      online: true
+      storage:
+        blobStoreName: docker-proxy-data
+        strictContentTypeValidation: true
+      proxy:
+        remoteUrl: https://mirror-quay.pkg.shecan.ir/
+        contentMaxAge: 1440
+        metadataMaxAge: 1440
+      negativeCache:
+        enabled: true
+        timeToLive: 1440
+      httpClient:
+        blocked: false
+        autoBlock: true
+        connection:
+          retries: 0
+          timeout: 60
+          enableCircularRedirects: false
+          enableCookies: false
+          useTrustStore: false
+      docker:
+        v1Enabled: false
+        forceBasicAuth: false
+        pathEnabled: true
+      dockerProxy:
+        indexType: REGISTRY
+        cacheForeignLayers: false
+    status_code:
+      - 200
+      - 201
+      - 204
+    return_content: true
+  when: "'shecan-quay-proxy' not in (nexus_repositories.json | map(attribute='name') | list)"
+
 
 - name: Read existing Docker repository configurations
   ansible.builtin.uri:
@@ -495,6 +681,12 @@
       endpoint: repositories/docker/hosted
     - name: docker-all
       endpoint: repositories/docker/group
+    - name: shecan-quay-proxy
+      endpoint: repositories/docker/proxy
+    - name: shecan-k8s-images
+      endpoint: repositories/docker/proxy
+    - name: shecan-quay-proxy
+      endpoint: repositories/docker/proxy
   loop_control:
     label: "{{ item.name }}"
   register: nexus_docker_repository_configs
@@ -565,6 +757,12 @@
       endpoint: repositories/docker/hosted
     - name: docker-all
       endpoint: repositories/docker/group
+    - name: shecan-quay-proxy
+      endpoint: repositories/docker/proxy
+    - name: shecan-k8s-images
+      endpoint: repositories/docker/proxy
+    - name: shecan-quay-proxy
+      endpoint: repositories/docker/proxy
   loop_control:
     label: "{{ item.name }}"
   register: nexus_docker_repository_verification
@@ -581,6 +779,45 @@
   loop: "{{ nexus_docker_repository_verification.results }}"
   loop_control:
     label: "{{ item.item.name }}"
+
+- name: Enforce REGISTRY index type on existing k8s-proxy
+  ansible.builtin.uri:
+    url: "{{ tools_stack_nexus_api_base_url }}/service/rest/v1/{{ item.item.endpoint }}/{{ item.item.name }}"
+    method: PUT
+    validate_certs: "{{ tools_stack_tls_enabled | bool }}"
+    use_proxy: false
+    ca_path: "{{ (tools_stack_certificate_remote_dir ~ '/lab-root-ca.crt') if (tools_stack_tls_enabled | bool) else omit }}"
+    headers:
+      Host: "{{ nexus_hostname }}"
+      Content-Type: application/json
+      Accept: application/json
+    url_username: admin
+    url_password: "{{ nexus_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    body: >-
+      {{
+        item.json
+        | combine(
+            {
+              'dockerProxy': (
+                item.json.dockerProxy
+                | combine({'indexType': 'REGISTRY'})
+              )
+            },
+            recursive=True
+          )
+      }}
+    status_code:
+      - 200
+      - 204
+    return_content: false
+  loop: "{{ nexus_docker_repository_verification.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when:
+    - item.item.name == 'k8s-proxy'
+    - item.json.dockerProxy.indexType | default('') != 'REGISTRY'
 
 - name: Read final Nexus repository list
   ansible.builtin.uri:
@@ -610,6 +847,10 @@
     - dockerhub-proxy
     - k8s-proxy
     - quay-proxy
+    - kubernetes-apt
+    - shecan-k8s-images
+    - shecan-kubernetes-apt
+    - shecan-quay-proxy
     - ghcr-proxy
     - docker-hosted
     - docker-all

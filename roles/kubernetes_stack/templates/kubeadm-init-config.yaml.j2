@@ -1,0 +1,26 @@
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: InitConfiguration
+localAPIEndpoint:
+  advertiseAddress: {{ hostvars[k8s_control_plane_leader].k8s_node_ip_effective }}
+  bindPort: {{ k8s_api_port }}
+nodeRegistration:
+  criSocket: "{{ k8s_cri_socket }}"
+  name: {{ hostvars[k8s_control_plane_leader].ansible_facts['hostname'] | default(k8s_control_plane_leader) }}
+---
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: ClusterConfiguration
+kubernetesVersion: v{{ k8s_version }}
+controlPlaneEndpoint: "{{ k8s_api_vip }}:{{ k8s_api_port }}"
+imageRepository: "{{ k8s_image_repository }}"
+dns:
+  imageRepository: "{{ k8s_image_repository }}/coredns"
+networking:
+  podSubnet: "{{ k8s_pod_subnet }}"
+  serviceSubnet: "{{ k8s_service_subnet }}"
+apiServer:
+  certSANs:
+    - "{{ k8s_api_vip }}"
+---
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+cgroupDriver: systemd

@@ -1,0 +1,5 @@
+---
+- name: Restart containerd after base configuration
+  ansible.builtin.systemd:
+    name: "{{ containerd_stack_service_name }}"
+    state: restarted

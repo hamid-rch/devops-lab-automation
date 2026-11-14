@@ -1,0 +1,11 @@
+---
+# SSH Stack Configuration
+
+ssh_stack_user: vagrant
+
+# Public key on Ansible Controller
+ssh_stack_public_key_path: "{{ lookup('env', 'HOME') }}/.ssh/id_ed25519.pub"
+
+# Authorized key configuration
+ssh_stack_key_state: present
+ssh_stack_manage_dir: true

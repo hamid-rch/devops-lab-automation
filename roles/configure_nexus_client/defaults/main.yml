@@ -72,6 +72,11 @@ repositories_docker_daemon_config_path: "/etc/docker/daemon.json"
 # disable run to remove those entries without deleting unrelated daemon data.
 repositories_docker_daemon_managed_state_path: "/var/lib/configure-repositories/docker-daemon-managed.json"
 
+repositories_kubernetes_apt_enabled: true
+repositories_kubernetes_apt_mirror: shecan
+repositories_kubernetes_apt_repo_name: kubernetes
+repositories_kubernetes_apt_trusted: true
+
 # Optional custom Nexus root CA. repositories_nexus_ca_path is a path on the
 # Ansible controller, not a path on the managed host.
 repositories_nexus_ca_enabled: false
@@ -88,3 +93,9 @@ repositories_docker_apt_arch_map:
   s390x: s390x
   ppc64le: ppc64el
   riscv64: riscv64
+
+repositories_dns_servers:
+  - "8.8.8.8"
+  - "1.1.1.1"
+
+repositories_dns_resolved_dropin_path: /etc/systemd/resolved.conf.d/90-ansible-dns.conf

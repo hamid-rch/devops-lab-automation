@@ -1,0 +1,5 @@
+---
+- name: Restart containerd after Nexus registry configuration
+  ansible.builtin.systemd:
+    name: "{{ configure_containerd_nexus_service_name }}"
+    state: restarted

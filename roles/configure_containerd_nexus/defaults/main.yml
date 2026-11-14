@@ -1,0 +1,20 @@
+---
+# Nexus Docker repositories are exposed through Traefik using path-based
+# routing, for example: nexus.lab/dockerhub-proxy/library/alpine:latest.
+configure_containerd_nexus_registry_host: nexus.lab
+configure_containerd_nexus_scheme: http
+configure_containerd_nexus_port: 80
+
+configure_containerd_nexus_config_path: /etc/containerd/config.toml
+configure_containerd_nexus_certs_dir: /etc/containerd/certs.d
+configure_containerd_nexus_service_name: containerd
+
+# Kubernetes nodes only need to pull and resolve image tags from Nexus.
+configure_containerd_nexus_capabilities:
+  - pull
+  - resolve
+
+configure_containerd_nexus_registry_authority: >-
+  {{ configure_containerd_nexus_registry_host }}{{ (':' ~ (configure_containerd_nexus_port | string)) if not ((configure_containerd_nexus_scheme == 'http' and configure_containerd_nexus_port | int == 80) or (configure_containerd_nexus_scheme == 'https' and configure_containerd_nexus_port | int == 443)) else '' }}
+configure_containerd_nexus_sandbox_image: >-
+  {{ configure_containerd_nexus_registry_authority }}/k8s-proxy/pause:3.10.2

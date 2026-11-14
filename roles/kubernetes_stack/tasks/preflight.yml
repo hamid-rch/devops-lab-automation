@@ -1,0 +1,47 @@
+---
+- name: Require Ubuntu 24.04 on Kubernetes lab nodes
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['distribution'] == "Ubuntu"
+      - ansible_facts['distribution_version'] is version('24.04', '>=')
+      - ansible_facts['distribution_version'] is version('24.10', '<')
+    fail_msg: "This role is designed for Ubuntu 24.04; detected {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}."
+
+- name: Add all Kubernetes lab nodes to /etc/hosts
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    create: true
+    owner: root
+    group: root
+    mode: "0644"
+    insertbefore: BOF
+    marker: "# {mark} ANSIBLE MANAGED KUBERNETES HOSTS"
+    block: |
+      {% for host in groups['k8s_stack'] | sort %}
+      {{ hostvars[host].ansible_host }} {{ host }}
+      {% endfor %}
+
+- name: Verify the configured Load Balancer interface exists
+  ansible.builtin.assert:
+    that:
+      - k8s_lb_interface in ansible_facts.interfaces
+    fail_msg: >-
+      Interface {{ k8s_lb_interface }} was not found on {{ inventory_hostname }}.
+      Set k8s_lb_interface to the VirtualBox host-only interface name.
+  when: inventory_hostname in groups.get(k8s_lb_group, [])
+
+- name: Verify containerd is installed on Kubernetes nodes
+  ansible.builtin.command: containerd --version
+  register: k8s_containerd_version
+  changed_when: false
+  when: >-
+    inventory_hostname in groups.get(k8s_control_plane_group, []) or
+    inventory_hostname in groups.get(k8s_worker_group, [])
+
+- name: Verify containerd service is active
+  ansible.builtin.command: systemctl is-active containerd
+  register: k8s_containerd_service
+  changed_when: false
+  when: >-
+    inventory_hostname in groups.get(k8s_control_plane_group, []) or
+    inventory_hostname in groups.get(k8s_worker_group, [])

@@ -1,0 +1,60 @@
+---
+- name: Install HAProxy and Keepalived
+  ansible.builtin.apt:
+    name:
+      - haproxy
+      - keepalived
+    state: present
+    update_cache: true
+    cache_valid_time: "{{ k8s_apt_cache_valid_time }}"
+
+- name: Configure HAProxy Kubernetes API frontend and backend
+  ansible.builtin.template:
+    src: haproxy.cfg.j2
+    dest: /etc/haproxy/haproxy.cfg
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+  register: k8s_haproxy_config_result
+
+- name: Validate HAProxy configuration before enabling the service
+  ansible.builtin.command:
+    argv:
+      - haproxy
+      - -c
+      - -f
+      - /etc/haproxy/haproxy.cfg
+  changed_when: false
+
+- name: Install HAProxy health-check helper
+  ansible.builtin.copy:
+    dest: /usr/local/sbin/check-haproxy.sh
+    owner: root
+    group: root
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      /usr/bin/systemctl is-active --quiet haproxy
+
+- name: Configure Keepalived VRRP unicast failover
+  ansible.builtin.template:
+    src: keepalived.conf.j2
+    dest: /etc/keepalived/keepalived.conf
+    owner: root
+    group: root
+    mode: "0600"
+    backup: true
+  register: k8s_keepalived_config_result
+
+- name: Enable and restart HAProxy after validating its configuration
+  ansible.builtin.systemd:
+    name: haproxy
+    enabled: true
+    state: "{{ 'restarted' if k8s_haproxy_config_result.changed else 'started' }}"
+
+- name: Enable and restart Keepalived when its configuration changes
+  ansible.builtin.systemd:
+    name: keepalived
+    enabled: true
+    state: "{{ 'restarted' if k8s_keepalived_config_result.changed else 'started' }}"
