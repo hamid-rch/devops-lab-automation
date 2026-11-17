@@ -89,12 +89,14 @@
   ansible.builtin.command: kubeadm init phase upload-certs --upload-certs --kubeconfig=/etc/kubernetes/super-admin.conf
   register: k8s_upload_certs_result
   changed_when: true
+  no_log: true
   when: inventory_hostname == k8s_control_plane_leader
-
+  
 - name: Store join command and certificate key on the leader for this play
   ansible.builtin.set_fact:
     k8s_join_command: "{{ k8s_join_command_result.stdout | trim }}"
     k8s_certificate_key: "{{ k8s_upload_certs_result.stdout | regex_findall('(?m)^([a-f0-9]{64})$') | first | default('') }}"
+  no_log: true
   when: inventory_hostname == k8s_control_plane_leader
 
 - name: Verify join command and certificate key were generated
@@ -138,8 +140,8 @@
 - name: Configure Calico node IP autodetection for the VirtualBox host-only network
   ansible.builtin.replace:
     path: "{{ k8s_calico_manifest_path }}"
-    regexp: '(?m)^([ \t]*)- name: IP\n\1  value: "autodetect"$'
-    replace: '\1- name: IP\n\1  value: "autodetect=cidr={{ k8s_node_network_cidr }}"'
+    regexp: '(?m)^([ \t]*)- name: IP\n\1  value: "[^"]+"(?:\n\1- name: IP_AUTODETECTION_METHOD\n\1  value: "[^"]+")?'
+    replace: '\1- name: IP\n\1  value: "autodetect"\n\1- name: IP_AUTODETECTION_METHOD\n\1  value: "cidr={{ k8s_node_network_cidr }}"'
     backup: true
   when: inventory_hostname == k8s_control_plane_leader
 
@@ -148,7 +150,7 @@
     argv:
       - grep
       - -Fq
-      - 'value: "autodetect=cidr={{ k8s_node_network_cidr }}"'
+      - 'value: "cidr={{ k8s_node_network_cidr }}"'
       - "{{ k8s_calico_manifest_path }}"
   changed_when: false
   when: inventory_hostname == k8s_control_plane_leader

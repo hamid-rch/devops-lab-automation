@@ -1,4 +1,13 @@
 ---
+- name: Validate Keepalived authentication password
+  ansible.builtin.assert:
+    that:
+      - k8s_keepalived_auth_pass | length > 0
+      - k8s_keepalived_auth_pass | length <= 8
+    fail_msg: "Keepalived password must contain between 1 and 8 characters."
+  run_once: true
+  delegate_to: localhost
+
 - name: Validate Kubernetes inventory groups
   ansible.builtin.assert:
     that:
@@ -10,6 +19,9 @@
       - (groups.get(k8s_lb_group, []) | intersect(groups.get(k8s_control_plane_group, [])) | length) == 0
       - (groups.get(k8s_lb_group, []) | intersect(groups.get(k8s_worker_group, [])) | length) == 0
       - (groups.get(k8s_control_plane_group, []) | intersect(groups.get(k8s_worker_group, [])) | length) == 0
+      - (k8s_keepalived_priorities | map('int') | unique | list | length) == k8s_expected_lb_nodes
+      - (k8s_keepalived_priorities | map('int') | min) >= 1
+      - (k8s_keepalived_priorities | map('int') | max) <= 254
     fail_msg: >-
       Expected {{ k8s_expected_lb_nodes }} hosts in [{{ k8s_lb_group }}],
       {{ k8s_expected_control_plane_nodes }} in [{{ k8s_control_plane_group }}],

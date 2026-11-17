@@ -17,8 +17,13 @@
     insertbefore: BOF
     marker: "# {mark} ANSIBLE MANAGED KUBERNETES HOSTS"
     block: |
-      {% for host in groups['k8s_stack'] | sort %}
-      {{ hostvars[host].ansible_host }} {{ host }}
+      {% set cluster_hosts = (
+        groups.get(k8s_lb_group, []) +
+        groups.get(k8s_control_plane_group, []) +
+        groups.get(k8s_worker_group, [])
+      ) | unique | sort %}
+      {% for host in cluster_hosts %}
+      {{ hostvars[host].k8s_node_ip_effective }} {{ host }}
       {% endfor %}
 
 - name: Verify the configured Load Balancer interface exists
